@@ -10,6 +10,8 @@ import rateLimit from '@fastify/rate-limit';
 import { Server as SocketIOServer } from 'socket.io';
 import { ZodError } from 'zod';
 import { authRoutes } from './routes/auth.js';
+import { profileRoutes } from './routes/profile.js';
+import { leaderboardRoutes } from './routes/leaderboard.js';
 import { registerMatchGateway } from './match/gateway.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -33,6 +35,8 @@ app.setErrorHandler((err, _req, reply) => {
 
 app.get('/health', async () => ({ ok: true, time: Date.now() }));
 await app.register(authRoutes);
+await app.register(profileRoutes);
+await app.register(leaderboardRoutes);
 
 await app.ready();
 

@@ -2,7 +2,7 @@
  * ApiClient.ts — Cliente HTTP fino para a API REST do servidor (auth).
  * Sem estado próprio: SessionManager decide o que fazer com as respostas.
  */
-import type { AuthResponse, PublicProfile } from '../../shared/netProtocol';
+import type { AuthResponse, LeaderboardResponse, LeaderboardSort, PublicProfile } from '../../shared/netProtocol';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
 
@@ -29,8 +29,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const ApiClient = {
-  register(email: string, password: string, displayName: string): Promise<AuthResponse> {
-    return request('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, displayName }) });
+  register(email: string, password: string, displayName: string, localXp: number): Promise<AuthResponse> {
+    return request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, displayName, localXp }),
+    });
   },
   login(email: string, password: string): Promise<AuthResponse> {
     return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
@@ -43,5 +46,17 @@ export const ApiClient = {
   },
   me(accessToken: string): Promise<{ profile: PublicProfile }> {
     return request('/auth/me', { headers: { Authorization: `Bearer ${accessToken}` } });
+  },
+  leaderboard(sort: LeaderboardSort, accessToken?: string | null): Promise<LeaderboardResponse> {
+    return request(`/leaderboard?sort=${sort}&limit=50`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    });
+  },
+  reportXp(accessToken: string, delta: number): Promise<{ xp: number }> {
+    return request('/profile/xp', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ delta }),
+    });
   },
 };

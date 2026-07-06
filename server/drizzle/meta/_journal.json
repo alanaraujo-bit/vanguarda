@@ -15,6 +15,13 @@
       "when": 1783352393979,
       "tag": "0001_ordinary_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783361991615,
+      "tag": "0002_sparkling_wasp",
+      "breakpoints": true
     }
   ]
 }

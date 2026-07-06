@@ -5,6 +5,7 @@
  */
 import type { MatchConfig, MatchRecord, MatchSummary } from '../../shared/types';
 import { SaveManager } from '../core/SaveManager';
+import { SessionManager } from '../net/SessionManager';
 import {
   ACHIEVEMENTS,
   levelFromXp,
@@ -110,6 +111,10 @@ export function applyMatchResult(config: MatchConfig, raw: RawMatchOutcome): Mat
   /* --------------------------------- XP final -------------------------------- */
   record.xpGained = xp;
   SaveManager.addXp(xp);
+  // Partidas online já têm o XP de conta creditado pelo próprio servidor
+  // (autoritativo, ver server/src/match/persist.ts) — só reportamos aqui o
+  // que vem de modos offline, onde o servidor não tem como calcular sozinho.
+  if (config.mode !== 'online') void SessionManager.reportXpGain(xp);
   const xpAfter = profile.xp;
   const levelAfter = levelFromXp(xpAfter);
 

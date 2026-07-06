@@ -290,6 +290,105 @@ export class UiTextInput extends Phaser.GameObjects.DOMElement {
   }
 }
 
+/**
+ * Lista rolável (arrasto touch/mouse + roda do mouse), mascarada pro viewport.
+ * Ao contrário dos outros widgets deste arquivo, `x`/`y` aqui são o canto
+ * superior esquerdo do viewport (mais natural pra empilhar linhas de cima
+ * pra baixo). Quem chama só usa `.content` (um Container comum) pra
+ * adicionar as linhas e depois informa a altura total com `setContentHeight`.
+ */
+export class UiScrollList extends Phaser.GameObjects.Container {
+  readonly content: Phaser.GameObjects.Container;
+  private readonly viewportW: number;
+  private readonly viewportH: number;
+  private readonly maskShape: Phaser.GameObjects.Graphics;
+  private readonly track: Phaser.GameObjects.Graphics;
+  private contentH = 0;
+  private scrollY = 0;
+  private dragging = false;
+  private dragStartY = 0;
+  private scrollStartY = 0;
+
+  constructor(scene: Phaser.Scene, x: number, y: number, width: number, height: number) {
+    super(scene, x, y);
+    this.viewportW = width;
+    this.viewportH = height;
+
+    this.content = scene.add.container(0, 0);
+    this.add(this.content);
+
+    this.maskShape = scene.make.graphics({}, false);
+    this.maskShape.fillStyle(0xffffff);
+    this.maskShape.fillRect(x, y, width, height);
+    this.content.setMask(this.maskShape.createGeometryMask());
+
+    this.track = scene.add.graphics();
+    this.add(this.track);
+
+    this.setSize(width, height);
+    this.setInteractive();
+
+    const bounds = new Phaser.Geom.Rectangle(x, y, width, height);
+    this.on('pointerdown', (p: Phaser.Input.Pointer) => {
+      this.dragging = true;
+      this.dragStartY = p.y;
+      this.scrollStartY = this.scrollY;
+    });
+    scene.input.on('pointermove', (p: Phaser.Input.Pointer) => {
+      if (!this.dragging || !p.isDown) return;
+      this.setScroll(this.scrollStartY - (p.y - this.dragStartY));
+    });
+    scene.input.on('pointerup', () => (this.dragging = false));
+    scene.input.on('wheel', (p: Phaser.Input.Pointer, _objs: unknown, _dx: number, dy: number) => {
+      if (Phaser.Geom.Rectangle.Contains(bounds, p.x, p.y)) this.setScroll(this.scrollY + dy * 0.5);
+    });
+
+    scene.add.existing(this);
+  }
+
+  /** Chame depois de popular `.content` — define o quanto dá pra rolar. */
+  setContentHeight(h: number): void {
+    this.contentH = h;
+    this.setScroll(this.scrollY);
+    this.redrawTrack();
+  }
+
+  /** Esvazia a lista (ex.: trocando de aba) sem destruir o widget em si. */
+  clear(): void {
+    this.content.removeAll(true);
+    this.contentH = 0;
+    this.setScroll(0);
+    this.track.clear();
+  }
+
+  private get maxScroll(): number {
+    return Math.max(0, this.contentH - this.viewportH);
+  }
+
+  private setScroll(y: number): void {
+    this.scrollY = Phaser.Math.Clamp(y, 0, this.maxScroll);
+    this.content.y = -this.scrollY;
+    this.redrawTrack();
+  }
+
+  private redrawTrack(): void {
+    this.track.clear();
+    if (this.maxScroll <= 0) return;
+    const tx = this.viewportW - 6;
+    this.track.fillStyle(0xffffff, 0.08);
+    this.track.fillRoundedRect(tx, 0, 4, this.viewportH, 2);
+    const thumbH = Math.max(30, (this.viewportH / this.contentH) * this.viewportH);
+    const thumbY = (this.scrollY / this.maxScroll) * (this.viewportH - thumbH);
+    this.track.fillStyle(COLORS.gold, 0.6);
+    this.track.fillRoundedRect(tx, thumbY, 4, thumbH, 2);
+  }
+
+  destroy(fromScene?: boolean): void {
+    this.maskShape.destroy();
+    super.destroy(fromScene);
+  }
+}
+
 /** Desenha um painel padrão no Graphics fornecido. */
 export function drawPanel(
   g: Phaser.GameObjects.Graphics,

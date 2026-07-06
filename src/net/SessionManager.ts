@@ -5,7 +5,8 @@
  * a sessão sem pedir login de novo a cada abertura do jogo.
  */
 import { ApiClient } from './ApiClient';
-import type { PublicProfile } from '../../shared/netProtocol';
+import { SaveManager } from '../core/SaveManager';
+import type { LeaderboardResponse, LeaderboardSort, PublicProfile } from '../../shared/netProtocol';
 
 const REFRESH_KEY = 'vanguarda-refresh-token';
 const PROFILE_CACHE_KEY = 'vanguarda-online-profile';
@@ -38,7 +39,9 @@ class SessionManagerImpl {
   }
 
   async register(email: string, password: string, displayName: string): Promise<PublicProfile> {
-    const res = await ApiClient.register(email, password, displayName);
+    // O XP já acumulado localmente vira o XP inicial da conta nova — é a
+    // "adoção" do progresso do aparelho pela conta (estilo Clash Royale).
+    const res = await ApiClient.register(email, password, displayName, SaveManager.data.xp);
     this.applySession(res.accessToken, res.refreshToken, res.profile);
     return res.profile;
   }
@@ -61,6 +64,30 @@ class SessionManagerImpl {
     } catch {
       this.clear();
       return false;
+    }
+  }
+
+  /** Ranking global — pública, mas inclui `me` se estivermos logados. */
+  fetchLeaderboard(sort: LeaderboardSort): Promise<LeaderboardResponse> {
+    return ApiClient.leaderboard(sort, this.accessToken);
+  }
+
+  /**
+   * Reporta XP ganho em modo offline (versus IA/sobrevivência) pra conta
+   * logada — best-effort, nunca deve travar o fluxo de partida. Partidas
+   * online não passam por aqui: o servidor já credita sozinho.
+   */
+  async reportXpGain(delta: number): Promise<void> {
+    if (!this.accessToken || delta <= 0) return;
+    try {
+      const res = await ApiClient.reportXp(this.accessToken, delta);
+      if (this._profile) {
+        this._profile = { ...this._profile, xp: res.xp };
+        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(this._profile));
+      }
+    } catch {
+      // Sem rede/servidor fora do ar — o XP local já foi salvo, só a conta
+      // que fica um pouco atrasada até a próxima partida reportar de novo.
     }
   }
 

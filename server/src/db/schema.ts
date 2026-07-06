@@ -67,9 +67,17 @@ export const profiles = pgTable(
     wins: integer('wins').notNull().default(0),
     losses: integer('losses').notNull().default(0),
     draws: integer('draws').notNull().default(0),
+    // XP vitalício da conta (qualquer modo, não só ranqueado) — ver shared/netProtocol.ts.
+    // Distinto do XP local do SaveManager (por aparelho, moeda de skins/títulos).
+    xp: integer('xp').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('profiles_display_name_lower_idx').on(t.displayNameLower)]
+  (t) => [
+    uniqueIndex('profiles_display_name_lower_idx').on(t.displayNameLower),
+    index('profiles_trophies_idx').on(t.trophies),
+    index('profiles_wins_idx').on(t.wins),
+    index('profiles_xp_idx').on(t.xp),
+  ]
 );
 
 export const matches = pgTable('matches', {

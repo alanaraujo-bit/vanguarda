@@ -10,7 +10,8 @@ import { z } from 'zod';
 import { db } from '../db/client.js';
 import { profiles, refreshTokens, users } from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { generateRefreshToken, hashToken, signAccessToken, verifyAccessToken } from '../auth/tokens.js';
+import { generateRefreshToken, hashToken, signAccessToken } from '../auth/tokens.js';
+import { requireUserId } from '../auth/guard.js';
 
 const registerSchema = z.object({
   email: z.string().email().max(254),
@@ -20,6 +21,9 @@ const registerSchema = z.object({
     .min(3)
     .max(20)
     .regex(/^[a-zA-Z0-9 _-]+$/, 'apenas letras, números, espaço, _ e -'),
+  // XP já acumulado localmente no aparelho — vira o XP inicial da conta nova
+  // (só é usado no INSERT de uma conta fresca, nunca soma numa já existente).
+  localXp: z.number().min(0).max(50_000_000).optional(),
 });
 
 const loginSchema = z.object({
@@ -60,9 +64,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const passwordHash = await hashPassword(body.password);
       const [user] = await db.insert(users).values({ email, passwordHash }).returning();
-      await db
-        .insert(profiles)
-        .values({ userId: user.id, displayName: body.displayName, displayNameLower });
+      await db.insert(profiles).values({
+        userId: user.id,
+        displayName: body.displayName,
+        displayNameLower,
+        xp: Math.round(body.localXp ?? 0),
+      });
 
       return reply.code(201).send(await issueSession(user.id));
     }
@@ -122,15 +129,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/auth/me', async (req, reply) => {
-    const auth = req.headers.authorization;
-    if (!auth?.startsWith('Bearer ')) return reply.code(401).send({ error: 'missing-token' });
-    try {
-      const payload = verifyAccessToken(auth.slice(7));
-      const profile = await db.query.profiles.findFirst({ where: eq(profiles.userId, payload.sub) });
-      if (!profile) return reply.code(404).send({ error: 'profile-not-found' });
-      return reply.send({ profile });
-    } catch {
-      return reply.code(401).send({ error: 'invalid-token' });
-    }
+    const userId = requireUserId(req);
+    if (!userId) return reply.code(401).send({ error: 'missing-token' });
+    const profile = await db.query.profiles.findFirst({ where: eq(profiles.userId, userId) });
+    if (!profile) return reply.code(404).send({ error: 'profile-not-found' });
+    return reply.send({ profile });
   });
 }

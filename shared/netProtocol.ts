@@ -93,10 +93,34 @@ export interface PublicProfile {
   wins: number;
   losses: number;
   draws: number;
+  /** XP vitalício da conta (qualquer modo) — distinto do XP local de skins/títulos. */
+  xp: number;
 }
 
 export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
   profile: PublicProfile;
+}
+
+/* ------------------------------- Ranking global ------------------------------ */
+
+export type LeaderboardSort = 'trophies' | 'wins' | 'xp';
+
+export interface LeaderboardEntry {
+  rank: number;
+  userId: string;
+  displayName: string;
+  trophies: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  xp: number;
+}
+
+export interface LeaderboardResponse {
+  sort: LeaderboardSort;
+  entries: LeaderboardEntry[];
+  /** Posição de quem pediu, mesmo fora do topo — null se anônimo. */
+  me: LeaderboardEntry | null;
 }

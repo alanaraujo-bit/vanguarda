@@ -12,6 +12,11 @@ import { matches, profiles } from '../db/schema.js';
 
 export type FinalizeOutcome = 'a_win' | 'b_win' | 'draw';
 
+export interface MatchStatsInput {
+  damageDealt: number;
+  kills: number;
+}
+
 export interface FinalizeInput {
   matchId: string;
   mode: 'ranked' | 'friendly';
@@ -20,7 +25,19 @@ export interface FinalizeInput {
   outcome: FinalizeOutcome;
   trophyDeltaA: number;
   trophyDeltaB: number;
+  statsA: MatchStatsInput;
+  statsB: MatchStatsInput;
   startedAtMs: number;
+}
+
+/**
+ * XP de conta ganho nesta partida — mesma base do XP local (Progression.ts):
+ * dano + abates + resultado. Sem os bônus de conquistas/missões, que são só
+ * um sistema local por aparelho, não vinculado à conta.
+ */
+function computeAccountXp(stats: MatchStatsInput, outcome: 'win' | 'loss' | 'draw'): number {
+  const base = stats.damageDealt / 80 + stats.kills * 2 + (outcome === 'win' ? 60 : outcome === 'draw' ? 25 : 15);
+  return Math.max(0, Math.round(base));
 }
 
 export async function finalizeMatch(input: FinalizeInput): Promise<void> {
@@ -41,22 +58,18 @@ export async function finalizeMatch(input: FinalizeInput): Promise<void> {
     endedAt: new Date(),
   });
 
-  await applyTrophyDelta(
-    input.playerAId,
-    input.trophyDeltaA,
-    input.outcome === 'a_win' ? 'win' : input.outcome === 'b_win' ? 'loss' : 'draw'
-  );
-  await applyTrophyDelta(
-    input.playerBId,
-    input.trophyDeltaB,
-    input.outcome === 'b_win' ? 'win' : input.outcome === 'a_win' ? 'loss' : 'draw'
-  );
+  const outcomeA = input.outcome === 'a_win' ? 'win' : input.outcome === 'b_win' ? 'loss' : 'draw';
+  const outcomeB = input.outcome === 'b_win' ? 'win' : input.outcome === 'a_win' ? 'loss' : 'draw';
+
+  await applyMatchDelta(input.playerAId, input.trophyDeltaA, outcomeA, computeAccountXp(input.statsA, outcomeA));
+  await applyMatchDelta(input.playerBId, input.trophyDeltaB, outcomeB, computeAccountXp(input.statsB, outcomeB));
 }
 
-async function applyTrophyDelta(
+async function applyMatchDelta(
   userId: string,
-  delta: number,
-  outcome: 'win' | 'loss' | 'draw'
+  trophyDelta: number,
+  outcome: 'win' | 'loss' | 'draw',
+  xpDelta: number
 ): Promise<void> {
   const statColumn =
     outcome === 'win' ? { wins: sql`${profiles.wins} + 1` } :
@@ -65,6 +78,10 @@ async function applyTrophyDelta(
 
   await db
     .update(profiles)
-    .set({ trophies: sql`GREATEST(0, ${profiles.trophies} + ${delta})`, ...statColumn })
+    .set({
+      trophies: sql`GREATEST(0, ${profiles.trophies} + ${trophyDelta})`,
+      xp: sql`${profiles.xp} + ${xpDelta}`,
+      ...statColumn,
+    })
     .where(eq(profiles.userId, userId));
 }

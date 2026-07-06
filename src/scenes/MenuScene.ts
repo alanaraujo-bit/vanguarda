@@ -457,18 +457,27 @@ export class MenuScene extends Phaser.Scene {
       onClick: () => this.showModes(true),
     }).setDepth(Z.ui);
 
-    // Secundários lado a lado (perfil também é acessível pelo chip do topo).
-    new UiButton(this, GAME_WIDTH / 2 - 119, ROW_Y, 'PERFIL', {
-      width: 216,
+    // Três botões lado a lado (perfil também é acessível pelo chip do topo).
+    const rowW = 200;
+    const rowGap = 20;
+    new UiButton(this, GAME_WIDTH / 2 - (rowW + rowGap), ROW_Y, 'PERFIL', {
+      width: rowW,
       height: 64,
-      fontSize: 17,
+      fontSize: 15,
       variant: 'ghost',
       onClick: () => this.scene.start('Profile'),
     }).setDepth(Z.ui);
-    new UiButton(this, GAME_WIDTH / 2 + 119, ROW_Y, 'ENCICLOPÉDIA', {
-      width: 216,
+    new UiButton(this, GAME_WIDTH / 2, ROW_Y, 'RANKING', {
+      width: rowW,
       height: 64,
-      fontSize: 17,
+      fontSize: 15,
+      variant: 'ghost',
+      onClick: () => this.scene.start('Ranking'),
+    }).setDepth(Z.ui);
+    new UiButton(this, GAME_WIDTH / 2 + (rowW + rowGap), ROW_Y, 'ENCICLOPÉDIA', {
+      width: rowW,
+      height: 64,
+      fontSize: 15,
       variant: 'ghost',
       onClick: () => this.scene.start('Codex'),
     }).setDepth(Z.ui);

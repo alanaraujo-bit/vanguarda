@@ -4,6 +4,6 @@
     "buildCommand": "cd server && npm install"
   },
   "deploy": {
-    "startCommand": "cd server && npm start"
+    "startCommand": "cd server && npm run db:migrate && npm start"
   }
 }

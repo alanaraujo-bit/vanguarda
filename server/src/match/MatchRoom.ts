@@ -213,6 +213,8 @@ export class MatchRoom {
       outcome: winner === 'draw' ? 'draw' : winner === 'player' ? 'a_win' : 'b_win',
       trophyDeltaA: deltaA,
       trophyDeltaB: deltaB,
+      statsA: state.stats[a.simTeam],
+      statsB: state.stats[b.simTeam],
       startedAtMs: this.startEpochMs,
     }).catch((err) => console.error('[match] falha ao persistir resultado:', err));
 
