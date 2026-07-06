@@ -25,6 +25,8 @@ import {
 import { TextureFactory } from '../gfx/TextureFactory';
 import { AudioEngine } from '../audio/AudioEngine';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
+import { SessionManager } from '../net/SessionManager';
+import { rankForTrophies } from '../../shared/ranks';
 import type { MatchRecord } from '../../shared/types';
 
 const TABS = ['ESTATÍSTICAS', 'CONQUISTAS', 'PERSONALIZAR', 'MISSÕES'] as const;
@@ -132,6 +134,8 @@ export class ProfileScene extends Phaser.Scene {
       makeText(this, px + pw - 30, top + 114, `${into}/${needed} XP`, 13, CSS.textDim).setOrigin(1, 0)
     );
 
+    const cellsTop = this.buildOnlineStatus(top + 170 + 16, px, pw) + 16;
+
     const s = p.stats;
     const winRate = s.matches > 0 ? `${Math.round((s.wins / s.matches) * 100)}%` : '—';
     const hours = Math.floor(s.playSeconds / 3600);
@@ -152,13 +156,69 @@ export class ProfileScene extends Phaser.Scene {
       const col = i % 2;
       const row = Math.floor(i / 2);
       const x = px + col * (cellW + 16);
-      const y = top + 172 + row * 118;
+      const y = cellsTop + row * 118;
       const cg = this.add.graphics();
       drawPanel(cg, x, y, cellW, 100, { radius: 16, fill: COLORS.uiPanelLight });
       this.content.add(cg);
       this.content.add(makeText(this, x + 24, y + 20, label.toUpperCase(), 14, CSS.textDim));
       this.content.add(makeText(this, x + 24, y + 46, value, 30));
     });
+  }
+
+  /** Status da conta online (troféus/patente) — o mesmo comandante, visto de fora do modo online.
+   * @returns Y da base do bloco desenhado. */
+  private buildOnlineStatus(topY: number, px: number, pw: number): number {
+    const h = 74;
+    const g = this.add.graphics();
+    const profile = SessionManager.profile;
+
+    if (SessionManager.isAuthenticated && profile) {
+      const rank = rankForTrophies(profile.trophies);
+      drawPanel(g, px, topY, pw, h, { radius: 16, stroke: COLORS.gold, fill: 0x2b2412 });
+      this.content.add(g);
+      this.content.add(
+        makeText(this, px + 24, topY + 22, `${rank.name} · ${profile.trophies} troféus`, 16, CSS.gold)
+      );
+      this.content.add(
+        makeText(
+          this,
+          px + 24,
+          topY + 48,
+          `${profile.wins}V ${profile.losses}D ${profile.draws}E — online`,
+          13,
+          CSS.textDim,
+          'normal'
+        )
+      );
+      this.content.add(
+        new UiButton(this, px + pw - 84, topY + h / 2, 'CONTA', {
+          width: 120,
+          height: 40,
+          fontSize: 13,
+          variant: 'ghost',
+          onClick: () => this.scene.start('Auth'),
+        })
+      );
+    } else {
+      drawPanel(g, px, topY, pw, h, { radius: 16 });
+      this.content.add(g);
+      this.content.add(
+        makeText(this, px + 24, topY + h / 2, 'Modo online desconectado', 15, CSS.textDim, 'normal').setOrigin(
+          0,
+          0.5
+        )
+      );
+      this.content.add(
+        new UiButton(this, px + pw - 100, topY + h / 2, 'CONECTAR', {
+          width: 150,
+          height: 40,
+          fontSize: 13,
+          variant: 'primary',
+          onClick: () => this.scene.start('Auth'),
+        })
+      );
+    }
+    return topY + h;
   }
 
   /* -------------------------------- Conquistas -------------------------------- */

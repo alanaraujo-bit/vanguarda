@@ -38,6 +38,11 @@ const game = new Phaser.Game({
     antialias: true,
     powerPreference: 'high-performance',
   },
+  // Permite sobrepor <input> HTML reais (login/registro) que acompanham a
+  // escala/centralização do FIT automaticamente — ver src/ui/widgets.ts.
+  dom: {
+    createContainer: true,
+  },
   fps: {
     target: 60,
     smoothStep: true,

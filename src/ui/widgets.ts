@@ -235,6 +235,61 @@ export class UiToggle extends Phaser.GameObjects.Container {
   }
 }
 
+export interface TextInputOptions {
+  width?: number;
+  height?: number;
+  type?: 'text' | 'password' | 'email';
+  placeholder?: string;
+  maxLength?: number;
+  /** Disparado no Enter — normalmente pra submeter o formulário. */
+  onEnter?: () => void;
+}
+
+/**
+ * Input de texto real sobreposto ao canvas (Phaser DOM Element — requer
+ * `dom: { createContainer: true }` na config do jogo, ver src/main.ts).
+ * Estilo em `.vg-input`/`.vg-input-error` no <style> de index.html.
+ */
+export class UiTextInput extends Phaser.GameObjects.DOMElement {
+  constructor(scene: Phaser.Scene, x: number, y: number, opts: TextInputOptions = {}) {
+    const el = document.createElement('input');
+    el.className = 'vg-input';
+    el.type = opts.type ?? 'text';
+    el.placeholder = opts.placeholder ?? '';
+    el.autocomplete = opts.type === 'password' ? 'current-password' : 'off';
+    if (opts.maxLength) el.maxLength = opts.maxLength;
+    el.style.width = `${opts.width ?? 340}px`;
+    el.style.height = `${opts.height ?? 56}px`;
+
+    super(scene, x, y, el);
+
+    if (opts.onEnter) {
+      el.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') opts.onEnter!();
+      });
+    }
+    scene.add.existing(this);
+  }
+
+  get value(): string {
+    return (this.node as HTMLInputElement).value;
+  }
+
+  set value(v: string) {
+    (this.node as HTMLInputElement).value = v;
+  }
+
+  setError(on: boolean): this {
+    this.node.classList.toggle('vg-input-error', on);
+    return this;
+  }
+
+  focusInput(): this {
+    (this.node as HTMLInputElement).focus();
+    return this;
+  }
+}
+
 /** Desenha um painel padrão no Graphics fornecido. */
 export function drawPanel(
   g: Phaser.GameObjects.Graphics,

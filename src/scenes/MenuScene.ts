@@ -16,6 +16,7 @@ import { levelFromXp, skinById, titleById, xpIntoLevel, DIFFICULTIES } from '../
 import { TextureFactory } from '../gfx/TextureFactory';
 import { UNIT_ORDER } from '../../shared/units';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
+import { SessionManager } from '../net/SessionManager';
 import type { Difficulty, GameMode, UnitKey } from '../../shared/types';
 
 const IOS_INSTALL_HINT_KEY = 'vanguarda-ios-install-hint-seen';
@@ -229,6 +230,21 @@ export class MenuScene extends Phaser.Scene {
     chip.add(
       makeText(this, barX + barW, 4, `${into}/${needed}`, 12, CSS.textDim, 'normal').setOrigin(1, 0.5)
     );
+
+    // Selo de troféus — só aparece com a conta online conectada (mesmo comandante,
+    // status de fora do modo online visível sem precisar abrir a tela de conta).
+    if (SessionManager.isAuthenticated && SessionManager.profile) {
+      const trophies = SessionManager.profile.trophies;
+      const bw = 118;
+      const bh = 30;
+      const bcx = w / 2 - bw / 2 - 10;
+      const bcy = -h / 2 + bh / 2 + 10;
+      g.fillStyle(0x2b2412, 0.95);
+      g.fillRoundedRect(bcx - bw / 2, bcy - bh / 2, bw, bh, 10);
+      g.lineStyle(2, COLORS.gold, 0.9);
+      g.strokeRoundedRect(bcx - bw / 2, bcy - bh / 2, bw, bh, 10);
+      chip.add(makeText(this, bcx, bcy, `${trophies} troféus`, 12, CSS.gold).setOrigin(0.5));
+    }
 
     chip.on('pointerover', () => chip.setScale(1.03));
     chip.on('pointerout', () => chip.setScale(1));
