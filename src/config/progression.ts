@@ -10,7 +10,7 @@ import type {
   MissionDef,
   SkinDef,
   TitleDef,
-} from '../core/types';
+} from '../../shared/types';
 
 /* ----------------------------------- XP ----------------------------------- */
 

@@ -8,15 +8,15 @@
  * e ritmo vertical consistentes — sem sobras nem elementos desalinhados.
  */
 import Phaser from 'phaser';
-import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../config/constants';
+import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../../shared/constants';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SaveManager } from '../core/SaveManager';
 import { InstallPrompt } from '../core/InstallPrompt';
 import { levelFromXp, skinById, titleById, xpIntoLevel, DIFFICULTIES } from '../config/progression';
 import { TextureFactory } from '../gfx/TextureFactory';
-import { UNIT_ORDER } from '../config/units';
+import { UNIT_ORDER } from '../../shared/units';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
-import type { Difficulty, GameMode, UnitKey } from '../core/types';
+import type { Difficulty, GameMode, UnitKey } from '../../shared/types';
 
 const IOS_INSTALL_HINT_KEY = 'vanguarda-ios-install-hint-seen';
 
@@ -72,6 +72,7 @@ export class MenuScene extends Phaser.Scene {
     this.buildIconButton(GEAR.x, GEAR.y, 'icon-gear', () =>
       this.scene.launch('Settings', { from: 'Menu' })
     );
+    this.buildIconButton(GEAR.x - 72, GEAR.y, 'icon-shield', () => this.scene.start('Auth'));
     this.buildLogo();
     this.buildHero();
     this.buildButtons();

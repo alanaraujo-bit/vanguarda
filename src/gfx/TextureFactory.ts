@@ -8,8 +8,8 @@
  * o time inimigo espelha o sprite em runtime.
  */
 import Phaser from 'phaser';
-import type { UnitDef, UnitKey } from '../core/types';
-import { UNIT_DEFS } from '../config/units';
+import type { UnitDef, UnitKey } from '../../shared/types';
+import { UNIT_DEFS } from '../../shared/units';
 import {
   COLORS,
   FIELD_BOTTOM,
@@ -17,7 +17,7 @@ import {
   GAME_HEIGHT,
   GAME_WIDTH,
   LANE_XS,
-} from '../config/constants';
+} from '../../shared/constants';
 
 const OUTLINE = 0x0a0f1e;
 

@@ -3,7 +3,7 @@
  * XP, nível, conquistas, missões diárias, skins e títulos desbloqueados.
  * Toda a avaliação é declarativa (config/progression.ts); aqui só orquestramos.
  */
-import type { MatchConfig, MatchRecord, MatchSummary } from '../core/types';
+import type { MatchConfig, MatchRecord, MatchSummary } from '../../shared/types';
 import { SaveManager } from '../core/SaveManager';
 import {
   ACHIEVEMENTS,

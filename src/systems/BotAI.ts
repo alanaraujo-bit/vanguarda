@@ -10,10 +10,10 @@
  *   3. AVANÇAR — com energia cheia, ataca a faixa menos defendida.
  */
 import Phaser from 'phaser';
-import type { DifficultyParams, Role, UnitKey } from '../core/types';
-import { PUSH_COMBOS, ROLE_COUNTERS, UNIT_DEFS, UNIT_ORDER } from '../config/units';
-import { ENEMY_BASE_Y, LANE_COUNT, PLAYER_BASE_Y } from '../config/constants';
-import { EnergySystem } from './EnergySystem';
+import type { DifficultyParams, Role, UnitKey } from '../../shared/types';
+import { PUSH_COMBOS, ROLE_COUNTERS, UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
+import { ENEMY_BASE_Y, LANE_COUNT, PLAYER_BASE_Y } from '../../shared/constants';
+import { EnergySystem } from '../../shared/EnergySystem';
 import type { GameScene } from '../scenes/GameScene';
 
 export class BotAI {

@@ -5,13 +5,13 @@
  * Versão inicial simples: grade estática 4x2, sem paginação/filtro.
  */
 import Phaser from 'phaser';
-import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../config/constants';
-import { UNIT_DEFS, UNIT_ORDER } from '../config/units';
+import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../../shared/constants';
+import { UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
 import { SaveManager } from '../core/SaveManager';
 import { skinById } from '../config/progression';
 import { TextureFactory } from '../gfx/TextureFactory';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
-import type { Role, UnitDef } from '../core/types';
+import type { Role, UnitDef } from '../../shared/types';
 
 const ROLE_LABEL: Record<Role, string> = {
   shock: 'Choque',

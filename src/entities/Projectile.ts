@@ -6,8 +6,8 @@
  * O impacto é delegado por callback: o projétil não conhece regras de dano.
  */
 import Phaser from 'phaser';
-import type { Targetable } from '../core/types';
-import { DEPTH } from '../config/constants';
+import type { Targetable } from '../../shared/types';
+import { DEPTH } from '../../shared/constants';
 
 export interface ProjectileConfig {
   x: number;

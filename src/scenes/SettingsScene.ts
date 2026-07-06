@@ -4,7 +4,7 @@
  * Persiste tudo imediatamente via SaveManager e aplica no AudioEngine.
  */
 import Phaser from 'phaser';
-import { COLORS, CSS, GAME_HEIGHT, GAME_WIDTH } from '../config/constants';
+import { COLORS, CSS, GAME_HEIGHT, GAME_WIDTH } from '../../shared/constants';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SaveManager } from '../core/SaveManager';
 import { UiButton, UiSlider, UiToggle, drawPanel, makeText } from '../ui/widgets';

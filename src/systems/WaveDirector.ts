@@ -4,9 +4,9 @@
  * que aperta gradualmente. Ondas múltiplas de 5 trazem um Titã.
  */
 import Phaser from 'phaser';
-import type { UnitKey } from '../core/types';
-import { UNIT_DEFS } from '../config/units';
-import { LANE_COUNT } from '../config/constants';
+import type { UnitKey } from '../../shared/types';
+import { UNIT_DEFS } from '../../shared/units';
+import { LANE_COUNT } from '../../shared/constants';
 import { bus, Evt } from '../core/events';
 import type { GameScene } from '../scenes/GameScene';
 

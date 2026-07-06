@@ -7,7 +7,8 @@
  * e chamadas diretas à API pública (playerDeploy, playerEnergy...).
  */
 import Phaser from 'phaser';
-import type { MatchConfig, Targetable, Team, UnitKey } from '../core/types';
+import type { Targetable, Team, UnitKey } from '../../shared/types';
+import { NetworkController, type OnlineMatchConfig } from '../net/NetworkController';
 import {
   COLORS,
   DEPTH,
@@ -20,8 +21,8 @@ import {
   OVERDRIVE_AT,
   PLAYER_BASE_Y,
   SPAWN_OFFSET,
-} from '../config/constants';
-import { UNIT_DEFS } from '../config/units';
+} from '../../shared/constants';
+import { UNIT_DEFS } from '../../shared/units';
 import { DIFFICULTIES, skinById } from '../config/progression';
 import { SaveManager } from '../core/SaveManager';
 import { bus, Evt } from '../core/events';
@@ -31,7 +32,7 @@ import { TextureFactory } from '../gfx/TextureFactory';
 import { Unit } from '../entities/Unit';
 import { Base } from '../entities/Base';
 import { Projectile } from '../entities/Projectile';
-import { EnergySystem } from '../systems/EnergySystem';
+import { EnergySystem } from '../../shared/EnergySystem';
 import { BotAI } from '../systems/BotAI';
 import { WaveDirector } from '../systems/WaveDirector';
 import { applyMatchResult } from '../systems/Progression';
@@ -43,7 +44,7 @@ interface FxSet {
 }
 
 export class GameScene extends Phaser.Scene {
-  config!: MatchConfig;
+  config!: OnlineMatchConfig;
   playerEnergy!: EnergySystem;
   playerBase!: Base;
   enemyBase!: Base;
@@ -53,6 +54,9 @@ export class GameScene extends Phaser.Scene {
   private projectiles: Projectile[] = [];
   private bot: BotAI | null = null;
   private waves: WaveDirector | null = null;
+  private network: NetworkController | null = null;
+  /** Epoch canônico (do servidor) em que a simulação deve começar — ancora os dois clientes. */
+  private onlineStartEpoch: number | null = null;
   private playerColor: number = COLORS.player;
   private fxCache = new Map<number, FxSet>();
   private stars!: Phaser.GameObjects.TileSprite;
@@ -71,8 +75,8 @@ export class GameScene extends Phaser.Scene {
     super('Game');
   }
 
-  init(data: MatchConfig): void {
-    this.config = { mode: data.mode ?? 'versus', difficulty: data.difficulty ?? 'normal' };
+  init(data: OnlineMatchConfig): void {
+    this.config = { mode: data.mode ?? 'versus', difficulty: data.difficulty ?? 'normal', online: data.online };
     // Reset de estado entre partidas (scenes são reutilizadas pelo Phaser).
     this.units = [];
     this.projectiles = [];
@@ -85,6 +89,8 @@ export class GameScene extends Phaser.Scene {
     this.energyWasFull = false;
     this.bot = null;
     this.waves = null;
+    this.network = data.online?.network ?? null;
+    this.onlineStartEpoch = data.online?.startEpochMs ?? null;
     this.trainingSpawner = null;
     this.stats = { damageDealt: 0, kills: 0, deploys: 0 };
   }
@@ -117,6 +123,8 @@ export class GameScene extends Phaser.Scene {
     /* --------------------------------- Modos --------------------------------- */
     if (this.config.mode === 'versus') {
       this.bot = new BotAI(this, DIFFICULTIES[this.config.difficulty]);
+    } else if (this.config.mode === 'online') {
+      this.wireNetwork();
     } else if (this.config.mode === 'survival') {
       this.enemyBase.invulnerable = true;
       this.playerEnergy.mult = 1.15;
@@ -167,10 +175,37 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Liga o relay do oponente e os eventos de ciclo de vida da partida online. */
+  private wireNetwork(): void {
+    const net = this.network;
+    if (!net) return;
+    net.onDeployRelay((key, lane) => this.deployUnit('enemy', key, lane, true));
+    net.onOpponentDisconnected(() =>
+      bus.emit(Evt.Announce, 'Oponente desconectou — aguardando reconexão...', COLORS.gold)
+    );
+    net.onOpponentReconnected(() => bus.emit(Evt.Announce, 'Oponente reconectou!', COLORS.success));
+    net.onResolved((resolution) => {
+      if (resolution.outcome === 'voided') {
+        bus.emit(Evt.Announce, 'Partida anulada (divergência de resultado)', COLORS.gold);
+        return;
+      }
+      const sign = resolution.trophyDelta >= 0 ? '+' : '';
+      bus.emit(
+        Evt.Announce,
+        `Ranqueado: ${sign}${resolution.trophyDelta} troféus`,
+        resolution.trophyDelta >= 0 ? COLORS.success : COLORS.danger
+      );
+    });
+  }
+
   update(_time: number, delta: number): void {
     const dt = Math.min(delta / 1000, 0.05);
     this.stars.tilePositionX += delta * 0.006;
     if (this.matchOver) return;
+    // Ancora o início da simulação no epoch do servidor — os dois lados começam no mesmo instante.
+    if (this.config.mode === 'online' && this.onlineStartEpoch !== null && Date.now() < this.onlineStartEpoch) {
+      return;
+    }
 
     this.elapsed += dt;
     this.playerEnergy.update(dt);
@@ -192,8 +227,13 @@ export class GameScene extends Phaser.Scene {
   /* ------------------------------ Relógio/versus ----------------------------- */
 
   private updateVersusClock(dt: number): void {
-    if (this.config.mode !== 'versus') return;
-    this.timeLeft -= dt;
+    if (this.config.mode !== 'versus' && this.config.mode !== 'online') return;
+    if (this.config.mode === 'online' && this.onlineStartEpoch !== null) {
+      // Deriva do epoch do servidor em vez de acumular dt local — evita deriva entre os dois clientes.
+      this.timeLeft = MATCH_DURATION - (Date.now() - this.onlineStartEpoch) / 1000;
+    } else {
+      this.timeLeft -= dt;
+    }
     const whole = Math.max(0, Math.ceil(this.timeLeft));
     if (whole !== this.lastWholeSecond) {
       this.lastWholeSecond = whole;
@@ -226,9 +266,16 @@ export class GameScene extends Phaser.Scene {
     return this.units.filter((u) => u.team === team && u.alive);
   }
 
+  /** Abandono explícito de uma partida online (botão ABANDONAR na pausa). */
+  forfeitOnline(): void {
+    if (!this.matchOver) this.network?.forfeit();
+  }
+
   /** Invocação pelo jogador (validada). @returns sucesso. */
   playerDeploy(key: UnitKey, lane: number): boolean {
-    return this.deployUnit('player', key, lane);
+    const ok = this.deployUnit('player', key, lane);
+    if (ok) this.network?.sendDeploy(key, lane);
+    return ok;
   }
 
   deployUnit(team: Team, key: UnitKey, lane: number, free = false): boolean {
@@ -462,6 +509,14 @@ export class GameScene extends Phaser.Scene {
     this.matchOver = true;
     this.trainingSpawner?.remove();
     AudioEngine.stopMusic();
+
+    if (this.network) {
+      this.network.sendReport({
+        outcome,
+        myBaseHpPct: this.playerBase.hp / this.playerBase.maxHp,
+        theirBaseHpPctObserved: this.enemyBase.hp / this.enemyBase.maxHp,
+      });
+    }
 
     // Comemoração dos vencedores.
     const winners = this.unitsOf(outcome === 'win' ? 'player' : 'enemy');

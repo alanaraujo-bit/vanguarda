@@ -4,7 +4,7 @@
  * proporcional ao dano (rachaduras de luz, tremor, fumaça).
  */
 import Phaser from 'phaser';
-import type { Targetable, Team } from '../core/types';
+import type { Targetable, Team } from '../../shared/types';
 import {
   BASE_HP,
   BASE_RADIUS,
@@ -12,7 +12,7 @@ import {
   TURRET_COOLDOWN,
   TURRET_DAMAGE,
   TURRET_RANGE,
-} from '../config/constants';
+} from '../../shared/constants';
 import { TextureFactory } from '../gfx/TextureFactory';
 import { bus, Evt } from '../core/events';
 import type { GameScene } from '../scenes/GameScene';

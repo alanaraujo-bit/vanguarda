@@ -29,7 +29,7 @@ export type Role =
   | 'swarm'
   | 'super';
 
-export type GameMode = 'training' | 'versus' | 'survival';
+export type GameMode = 'training' | 'versus' | 'survival' | 'online';
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
 /** Definição estática (data-driven) de uma unidade. */

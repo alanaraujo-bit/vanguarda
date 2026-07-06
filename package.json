@@ -12,7 +12,8 @@
     "pwa:icons": "pwa-assets-generator --preset minimal-2023 public/icon.svg"
   },
   "dependencies": {
-    "phaser": "^3.90.0"
+    "phaser": "^3.90.0",
+    "socket.io-client": "^4.8.0"
   },
   "devDependencies": {
     "@vite-pwa/assets-generator": "^1.0.2",

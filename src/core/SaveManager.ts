@@ -3,7 +3,7 @@
  * Singleton com API síncrona; toda mutação salva imediatamente.
  * Versão no nome da chave permite migrações futuras sem corromper saves.
  */
-import type { MatchRecord, ProfileData, SettingsData } from './types';
+import type { MatchRecord, ProfileData, SettingsData } from '../../shared/types';
 import { missionsForToday, todayKey } from '../config/progression';
 
 const SAVE_KEY = 'vanguarda-save-v1';

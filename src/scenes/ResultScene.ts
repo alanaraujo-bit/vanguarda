@@ -4,8 +4,8 @@
  * level-up, e desfile de desbloqueios (conquistas, missões, skins, títulos).
  */
 import Phaser from 'phaser';
-import type { MatchSummary } from '../core/types';
-import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../config/constants';
+import type { MatchSummary } from '../../shared/types';
+import { COLORS, CSS, FONT, GAME_HEIGHT, GAME_WIDTH, hex } from '../../shared/constants';
 import { AudioEngine } from '../audio/AudioEngine';
 import {
   ACHIEVEMENTS,

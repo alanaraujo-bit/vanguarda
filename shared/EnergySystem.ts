@@ -3,7 +3,7 @@
  * Instanciado duas vezes por partida (jogador e bot), com multiplicadores
  * independentes (dificuldade, Sobrecarga, modo treino).
  */
-import { ENERGY_MAX, ENERGY_REGEN, ENERGY_START } from '../config/constants';
+import { ENERGY_MAX, ENERGY_REGEN, ENERGY_START } from './constants';
 
 export class EnergySystem {
   current: number;

@@ -11,7 +11,7 @@ import {
   GAME_HEIGHT,
   GAME_WIDTH,
   hex,
-} from '../config/constants';
+} from '../../shared/constants';
 import { SaveManager } from '../core/SaveManager';
 import {
   ACHIEVEMENTS,
@@ -25,7 +25,7 @@ import {
 import { TextureFactory } from '../gfx/TextureFactory';
 import { AudioEngine } from '../audio/AudioEngine';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
-import type { MatchRecord } from '../core/types';
+import type { MatchRecord } from '../../shared/types';
 
 const TABS = ['ESTATÍSTICAS', 'CONQUISTAS', 'PERSONALIZAR', 'MISSÕES'] as const;
 type Tab = (typeof TABS)[number];

@@ -5,7 +5,7 @@
  */
 import Phaser from 'phaser';
 import { TextureFactory } from '../gfx/TextureFactory';
-import { COLORS } from '../config/constants';
+import { COLORS } from '../../shared/constants';
 import { SaveManager } from '../core/SaveManager';
 import { skinById } from '../config/progression';
 

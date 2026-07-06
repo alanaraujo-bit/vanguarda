@@ -10,7 +10,7 @@
  *  - Lâmina                   <- parada por Bastião e Faísca (corpo a corpo barato)
  *  - Avanços sustentados      <- Lumen mantém a linha viva
  */
-import type { Role, UnitDef, UnitKey } from '../core/types';
+import type { Role, UnitDef, UnitKey } from './types';
 
 export const UNIT_DEFS: Record<UnitKey, UnitDef> = {
   faisca: {

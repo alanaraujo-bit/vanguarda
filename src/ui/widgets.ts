@@ -4,7 +4,7 @@
  * traço luminoso, feedback de hover/pressão e som de UI integrado.
  */
 import Phaser from 'phaser';
-import { COLORS, CSS, FONT } from '../config/constants';
+import { COLORS, CSS, FONT } from '../../shared/constants';
 import { AudioEngine } from '../audio/AudioEngine';
 import { shade } from '../gfx/TextureFactory';
 

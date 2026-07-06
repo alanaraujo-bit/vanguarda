@@ -6,8 +6,8 @@
  * flash de dano, tremor de recuo), o que dá vida sem spritesheets.
  */
 import Phaser from 'phaser';
-import type { Targetable, Team, UnitDef } from '../core/types';
-import { DEPTH, UNIT_VISUAL_SCALE } from '../config/constants';
+import type { Targetable, Team, UnitDef } from '../../shared/types';
+import { DEPTH, UNIT_VISUAL_SCALE } from '../../shared/constants';
 import { TextureFactory } from '../gfx/TextureFactory';
 import type { GameScene } from '../scenes/GameScene';
 

@@ -7,7 +7,7 @@
  * da GameScene — a HUD nunca toca nas entidades diretamente.
  */
 import Phaser from 'phaser';
-import type { MatchConfig, UnitKey } from '../core/types';
+import type { MatchConfig, UnitKey } from '../../shared/types';
 import {
   COLORS,
   CSS,
@@ -21,8 +21,8 @@ import {
   MATCH_DURATION,
   UNIT_VISUAL_SCALE,
   hex,
-} from '../config/constants';
-import { UNIT_DEFS, UNIT_ORDER } from '../config/units';
+} from '../../shared/constants';
+import { UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
 import { Evt, subscribe } from '../core/events';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SaveManager } from '../core/SaveManager';
@@ -758,6 +758,7 @@ export class HUDScene extends Phaser.Scene {
   }
 
   private quitToMenu(): void {
+    if (this.config.mode === 'online') this.game_.forfeitOnline();
     AudioEngine.duck(false);
     AudioEngine.stopMusic();
     this.scene.stop('Game');

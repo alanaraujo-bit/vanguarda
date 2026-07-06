@@ -3,7 +3,7 @@
  * Configura o Phaser (escala responsiva, 60 FPS) e registra as scenes.
  */
 import Phaser from 'phaser';
-import { GAME_HEIGHT, GAME_WIDTH } from './config/constants';
+import { GAME_HEIGHT, GAME_WIDTH } from '../shared/constants';
 import { AudioEngine } from './audio/AudioEngine';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
@@ -13,7 +13,13 @@ import { ResultScene } from './scenes/ResultScene';
 import { SettingsScene } from './scenes/SettingsScene';
 import { ProfileScene } from './scenes/ProfileScene';
 import { CodexScene } from './scenes/CodexScene';
+import { AuthScene } from './scenes/AuthScene';
+import { SessionManager } from './net/SessionManager';
 import './core/InstallPrompt';
+
+// Tenta restaurar a sessão online em segundo plano — não bloqueia o boot
+// (o jogo offline funciona igual sem isso; só afeta o menu "Modo Online").
+void SessionManager.restore();
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
@@ -49,6 +55,7 @@ const game = new Phaser.Game({
     SettingsScene,
     ProfileScene,
     CodexScene,
+    AuthScene,
   ],
 });
 
