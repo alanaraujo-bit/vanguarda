@@ -10,7 +10,14 @@
 import Phaser from 'phaser';
 import type { UnitDef, UnitKey } from '../core/types';
 import { UNIT_DEFS } from '../config/units';
-import { COLORS, GAME_HEIGHT, GAME_WIDTH, LANE_YS } from '../config/constants';
+import {
+  COLORS,
+  FIELD_BOTTOM,
+  FIELD_TOP,
+  GAME_HEIGHT,
+  GAME_WIDTH,
+  LANE_XS,
+} from '../config/constants';
 
 const OUTLINE = 0x0a0f1e;
 
@@ -158,59 +165,71 @@ export const TextureFactory = {
     g.destroy();
   },
 
-  /** Céu + plataforma da arena com as três faixas de combate. */
+  /**
+   * Céu + plataforma da arena com as três faixas de combate verticais.
+   * Base inimiga no topo, base do jogador embaixo, "rio" horizontal no
+   * meio dividindo os territórios — layout retrato estilo Clash Royale.
+   */
   arena(scene: Phaser.Scene): void {
     const g = makeGraphics(scene);
-    // Céu em gradiente vertical profundo.
+    // Céu em gradiente vertical profundo (claro em cima, mais escuro embaixo).
     g.fillGradientStyle(COLORS.bgMid, COLORS.bgMid, COLORS.bgDeep, COLORS.bgDeep, 1);
     g.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-    // Nebulosas distantes (elipses translúcidas).
+    // Nebulosas distantes (elipses translúcidas), perto do território inimigo.
     g.fillStyle(0x24346b, 0.35);
-    g.fillEllipse(280, 120, 520, 180);
+    g.fillEllipse(170, 130, 300, 160);
     g.fillStyle(0x3a2a6b, 0.28);
-    g.fillEllipse(980, 90, 460, 150);
+    g.fillEllipse(560, 100, 260, 140);
     g.fillStyle(0x1b4a6b, 0.22);
-    g.fillEllipse(660, 180, 700, 160);
+    g.fillEllipse(360, 220, 320, 150);
 
-    // Plataforma principal.
-    const top = 238;
-    const bottom = 648;
+    // Plataforma principal (vertical, margens laterais), sempre alinhada
+    // ao campo jogável — a bandeja de cartas ocupa o restante embaixo.
+    const left = 40;
+    const right = GAME_WIDTH - 40;
+    const top = FIELD_TOP - 50;
+    const bottom = FIELD_BOTTOM + 15;
     g.fillStyle(COLORS.ground, 1);
-    g.fillRoundedRect(34, top, GAME_WIDTH - 68, bottom - top, 26);
+    g.fillRoundedRect(left, top, right - left, bottom - top, 26);
     g.lineStyle(3, COLORS.groundLine, 1);
-    g.strokeRoundedRect(34, top, GAME_WIDTH - 68, bottom - top, 26);
-    // Borda superior iluminada.
+    g.strokeRoundedRect(left, top, right - left, bottom - top, 26);
+    // Borda lateral iluminada (equivalente à "borda superior" da versão landscape).
     g.lineStyle(2, 0x3f5da8, 0.8);
-    g.lineBetween(60, top + 2, GAME_WIDTH - 60, top + 2);
+    g.lineBetween(left + 2, top + 26, left + 2, bottom - 26);
+    g.lineBetween(right - 2, top + 26, right - 2, bottom - 26);
 
-    // Grade vertical sutil.
+    // Grade horizontal sutil.
     g.lineStyle(1, COLORS.groundLine, 0.35);
-    for (let x = 120; x < GAME_WIDTH - 60; x += 80) {
-      g.lineBetween(x, top + 14, x, bottom - 14);
+    for (let y = top + 60; y < bottom - 60; y += 80) {
+      g.lineBetween(left + 14, y, right - 14, y);
     }
 
-    // Faixas de combate.
-    for (const laneY of LANE_YS) {
+    // Faixas de combate (corredores verticais) — largas o bastante para as
+    // unidades em escala visual maior.
+    const bandTop = top + 20;
+    const bandBottom = bottom - 20;
+    for (const laneX of LANE_XS) {
       g.fillStyle(COLORS.laneGlow, 0.5);
-      g.fillRoundedRect(120, laneY - 46, GAME_WIDTH - 240, 92, 18);
+      g.fillRoundedRect(laneX - 52, bandTop, 104, bandBottom - bandTop, 18);
       g.lineStyle(2, 0x2e4a8f, 0.55);
-      g.strokeRoundedRect(120, laneY - 46, GAME_WIDTH - 240, 92, 18);
-      // Setas direcionais sutis no piso da faixa.
+      g.strokeRoundedRect(laneX - 52, bandTop, 104, bandBottom - bandTop, 18);
+      // Setas direcionais sutis no piso da faixa (apontando pra baixo).
       g.lineStyle(2, 0x3f5da8, 0.22);
-      for (let x = 230; x < GAME_WIDTH - 240; x += 130) {
-        g.lineBetween(x, laneY - 10, x + 16, laneY);
-        g.lineBetween(x + 16, laneY, x, laneY + 10);
+      for (let y = bandTop + 90; y < bandBottom - 90; y += 130) {
+        g.lineBetween(laneX - 10, y, laneX, y + 16);
+        g.lineBetween(laneX, y + 16, laneX + 10, y);
       }
     }
 
-    // Linha central da arena.
+    // "Rio" horizontal dividindo território inimigo (topo) e jogador (embaixo).
+    const midY = (FIELD_TOP + FIELD_BOTTOM) / 2;
     g.lineStyle(3, 0x3f5da8, 0.5);
-    for (let y = top + 18; y < bottom - 18; y += 26) {
-      g.lineBetween(GAME_WIDTH / 2, y, GAME_WIDTH / 2, y + 13);
+    for (let x = left + 18; x < right - 18; x += 26) {
+      g.lineBetween(x, midY, x + 13, midY);
     }
     g.fillStyle(0x3f5da8, 0.6);
-    g.fillCircle(GAME_WIDTH / 2, top + 4, 5);
-    g.fillCircle(GAME_WIDTH / 2, bottom - 4, 5);
+    g.fillCircle(left + 4, midY, 5);
+    g.fillCircle(right - 4, midY, 5);
 
     g.generateTexture('arena', GAME_WIDTH, GAME_HEIGHT);
     g.destroy();

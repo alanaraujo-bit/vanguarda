@@ -31,10 +31,10 @@ function attackType(def: UnitDef): string {
   return 'Corpo a corpo';
 }
 
-const CARD_W = 290;
+const CARD_W = 320;
 const CARD_H = 250;
 const GAP = 16;
-const COLS = 4;
+const COLS = 2;
 
 export class CodexScene extends Phaser.Scene {
   constructor() {
@@ -48,19 +48,19 @@ export class CodexScene extends Phaser.Scene {
     this.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'arena').setAlpha(0.3);
     this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.bgDeep, 0.62);
 
-    new UiButton(this, 96, 42, '← MENU', {
-      width: 150,
-      height: 46,
-      fontSize: 17,
+    new UiButton(this, 74, 30, '← MENU', {
+      width: 108,
+      height: 38,
+      fontSize: 14,
       variant: 'ghost',
       onClick: () => this.scene.start('Menu'),
     });
-    makeText(this, GAME_WIDTH / 2, 42, 'ENCICLOPÉDIA DE UNIDADES', 28)
+    makeText(this, GAME_WIDTH / 2, 78, 'ENCICLOPÉDIA DE UNIDADES', 22)
       .setOrigin(0.5)
-      .setLetterSpacing(4);
+      .setLetterSpacing(2);
 
     const x0 = (GAME_WIDTH - (COLS * CARD_W + (COLS - 1) * GAP)) / 2;
-    const y0 = 96;
+    const y0 = 120;
 
     UNIT_ORDER.forEach((key, i) => {
       const def = UNIT_DEFS[key];

@@ -1,7 +1,8 @@
 /**
  * HUDScene.ts — Interface de batalha (scene paralela à GameScene).
- * Responsável por: cartas de invocação (toque e arrastar), energia,
- * barras das bases, cronômetro, anúncios, pausa e dicas de treino.
+ * Responsável por: mão de cartas estilo Clash Royale (4 na mão + próxima,
+ * deck ciclando a cada invocação), energia, barras das bases, cronômetro,
+ * anúncios, pausa e dicas de treino.
  * Toda comunicação com a partida passa pelo bus ou pela API pública
  * da GameScene — a HUD nunca toca nas entidades diretamente.
  */
@@ -11,11 +12,14 @@ import {
   COLORS,
   CSS,
   DEPTH,
+  FIELD_BOTTOM,
+  FIELD_TOP,
   FONT,
   GAME_HEIGHT,
   GAME_WIDTH,
-  LANE_YS,
+  LANE_XS,
   MATCH_DURATION,
+  UNIT_VISUAL_SCALE,
   hex,
 } from '../config/constants';
 import { UNIT_DEFS, UNIT_ORDER } from '../config/units';
@@ -27,29 +31,53 @@ import { TextureFactory } from '../gfx/TextureFactory';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
 import type { GameScene } from './GameScene';
 
-const CARD_W = 88;
-const CARD_H = 112;
-const CARD_Y = GAME_HEIGHT - 62;
-const FIELD_TOP = 150;
-const FIELD_BOTTOM = GAME_HEIGHT - 124;
+/* ------------------------------ Layout da bandeja ---------------------------
+ * A bandeja ocupa o rodapé inteiro (estilo Clash Royale):
+ *   [nome + HP do jogador]
+ *   [PRÓXIMA]  [carta] [carta] [carta] [carta]
+ *   [⚡ N  ▮▮▮▮▮▮▮▮▮▮]
+ */
+const TRAY_TOP = 1012;
+const HAND_SIZE = 4;
+const CARD_W = 138;
+const CARD_H = 176;
+const CARD_GAP = 8;
+const HAND_X0 = 112;
+const CARD_Y = 1140;
+const NEXT_W = 84;
+const NEXT_H = 108;
+const NEXT_X = 54;
+const NEXT_Y = 1174;
+const ENERGY_Y = 1240;
+const ENERGY_H = 28;
+/** Barras de HP: X inicial compartilhado (topo e bandeja). */
+const STATUS_BAR_X = 24;
+const TOP_BAR_H = 110;
 
 const TRAINING_TIPS = [
   'Toque numa carta e depois numa faixa para invocar.',
   'Você também pode ARRASTAR a carta até a faixa.',
+  'Ao usar uma carta, a PRÓXIMA do deck entra na mão.',
   'Enxames derretem tanques como o Bastião e o Titã.',
   'O Trovão limpa grupos inteiros com dano em área.',
   'A Lâmina caça atiradores e artilharia rapidamente.',
   'O Lúmen cura o aliado mais ferido ao seu alcance.',
   'Guarde energia para responder aos avanços inimigos.',
-  'A torreta da sua base defende sozinha o alcance curto.',
 ];
 
 interface CardView {
+  slot: number;
   key: UnitKey;
   container: Phaser.GameObjects.Container;
   bg: Phaser.GameObjects.Graphics;
+  icon: Phaser.GameObjects.Image;
+  nameText: Phaser.GameObjects.Text;
   costText: Phaser.GameObjects.Text;
   x: number;
+  /** Cache do último estado desenhado ("selecionada|paga|carta"). */
+  lastState: string;
+  /** Em transição de ciclo (a carta jogada saindo, a nova entrando). */
+  cycling: boolean;
 }
 
 export class HUDScene extends Phaser.Scene {
@@ -58,7 +86,14 @@ export class HUDScene extends Phaser.Scene {
   private playerColor: number = COLORS.player;
 
   private cards: CardView[] = [];
-  private selected: UnitKey | null = null;
+  /** Cartas fora da mão, na ordem em que voltarão (fila do deck). */
+  private queue: UnitKey[] = [];
+  private nextIcon!: Phaser.GameObjects.Image;
+  private nextCostText!: Phaser.GameObjects.Text;
+  private nextContainer!: Phaser.GameObjects.Container;
+
+  private selectedSlot: number | null = null;
+  private pressedSlot: number | null = null;
   private dragGhost: Phaser.GameObjects.Image | null = null;
   private dragging = false;
   private downPos = new Phaser.Math.Vector2();
@@ -88,7 +123,9 @@ export class HUDScene extends Phaser.Scene {
   init(data: MatchConfig): void {
     this.config = data;
     this.cards = [];
-    this.selected = null;
+    this.queue = [];
+    this.selectedSlot = null;
+    this.pressedSlot = null;
     this.dragGhost = null;
     this.dragging = false;
     this.laneHighlights = [];
@@ -107,13 +144,14 @@ export class HUDScene extends Phaser.Scene {
 
     this.buildLaneHighlights();
     this.buildTopBar();
+    this.buildTray();
     this.buildEnergyBar();
     this.buildCards();
     this.buildAnnounce();
     this.buildPausePanel();
     if (this.config.mode === 'training') this.buildTips();
     if (SaveManager.settings.showFps) {
-      this.fpsText = makeText(this, GAME_WIDTH - 12, GAME_HEIGHT - 20, '', 13, CSS.textDim)
+      this.fpsText = makeText(this, GAME_WIDTH - 10, TOP_BAR_H + 16, '', 13, CSS.textDim)
         .setOrigin(1, 0.5)
         .setDepth(DEPTH.announce);
     }
@@ -145,10 +183,8 @@ export class HUDScene extends Phaser.Scene {
 
     const kb = this.input.keyboard;
     if (kb) {
-      const keys = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT'];
-      keys.forEach((k, i) =>
-        kb.on(`keydown-${k}`, () => this.toggleSelect(UNIT_ORDER[i]))
-      );
+      const keys = ['ONE', 'TWO', 'THREE', 'FOUR'];
+      keys.forEach((k, slot) => kb.on(`keydown-${k}`, () => this.toggleSelect(slot)));
       (['Q', 'W', 'E'] as const).forEach((k, lane) =>
         kb.on(`keydown-${k}`, () => this.deploySelected(lane))
       );
@@ -166,16 +202,19 @@ export class HUDScene extends Phaser.Scene {
 
   private buildTopBar(): void {
     const g = this.add.graphics().setDepth(DEPTH.announce - 10);
-    g.fillStyle(COLORS.bgDeep, 0.55);
-    g.fillRect(0, 0, GAME_WIDTH, 54);
+    g.fillStyle(COLORS.bgDeep, 0.6);
+    g.fillRect(0, 0, GAME_WIDTH, TOP_BAR_H);
     g.lineStyle(1, COLORS.uiStroke, 0.5);
-    g.lineBetween(0, 54, GAME_WIDTH, 54);
+    g.lineBetween(0, TOP_BAR_H, GAME_WIDTH, TOP_BAR_H);
 
-    this.playerHpBar = this.add.graphics().setDepth(DEPTH.announce - 9);
+    // Faixa do inimigo (topo) — a do jogador fica perto do polegar, na bandeja.
     this.enemyHpBar = this.add.graphics().setDepth(DEPTH.announce - 9);
-    makeText(this, 20, 10, SaveManager.data.name.toUpperCase(), 14, hex(this.playerColor));
     const rightLabel = this.config.mode === 'survival' ? 'PORTAL' : 'INIMIGO';
-    makeText(this, GAME_WIDTH - 20, 10, rightLabel, 14, CSS.enemy).setOrigin(1, 0);
+    makeText(this, STATUS_BAR_X, 10, rightLabel, 15, CSS.enemy);
+    this.playerHpBar = this.add.graphics().setDepth(DEPTH.announce - 9);
+    makeText(this, STATUS_BAR_X, TRAY_TOP + 22, SaveManager.data.name.toUpperCase(), 15, hex(this.playerColor))
+      .setOrigin(0, 0.5)
+      .setDepth(DEPTH.announce - 9);
     this.redrawHpBars();
 
     // Cronômetro / contador central.
@@ -185,51 +224,63 @@ export class HUDScene extends Phaser.Scene {
         : this.config.mode === 'survival'
           ? 'ONDA 1'
           : 'TREINO';
-    this.timerText = makeText(this, GAME_WIDTH / 2, 27, startLabel, 26)
+    this.timerText = makeText(this, GAME_WIDTH / 2, 80, startLabel, 34)
       .setOrigin(0.5)
       .setDepth(DEPTH.announce - 8)
       .setLetterSpacing(2);
 
-    // Botão de pausa.
+    // Botão de pausa (canto superior direito).
     const pauseBtn = this.add
-      .container(GAME_WIDTH - 40, 90)
+      .container(GAME_WIDTH - 44, 42, [])
       .setDepth(DEPTH.announce - 8)
       .setSize(52, 52)
       .setInteractive({ useHandCursor: true });
     const pbg = this.add.graphics();
     pbg.fillStyle(COLORS.uiPanel, 0.9);
-    pbg.fillRoundedRect(-24, -24, 48, 48, 12);
+    pbg.fillRoundedRect(-26, -26, 52, 52, 14);
     pbg.lineStyle(2, COLORS.uiStroke, 0.9);
-    pbg.strokeRoundedRect(-24, -24, 48, 48, 12);
-    pauseBtn.add([pbg, this.add.image(0, 0, 'icon-pause').setScale(0.8)]);
+    pbg.strokeRoundedRect(-26, -26, 52, 52, 14);
+    pauseBtn.add([pbg, this.add.image(0, 0, 'icon-pause').setScale(0.85)]);
     pauseBtn.on('pointerup', () => this.togglePause());
   }
 
+  /** Fundo da bandeja de comando (rodapé inteiro). */
+  private buildTray(): void {
+    const g = this.add.graphics().setDepth(DEPTH.announce - 11);
+    g.fillStyle(0x070c1a, 0.94);
+    g.fillRect(0, TRAY_TOP, GAME_WIDTH, GAME_HEIGHT - TRAY_TOP);
+    g.lineStyle(2, COLORS.uiStroke, 0.6);
+    g.lineBetween(0, TRAY_TOP, GAME_WIDTH, TRAY_TOP);
+  }
+
   private redrawHpBars(): void {
-    const w = 350;
-    const h = 16;
+    const h = 18;
     const draw = (
       g: Phaser.GameObjects.Graphics,
       x: number,
+      y: number,
+      w: number,
       pct: number,
-      color: number,
-      rightAligned: boolean
+      color: number
     ) => {
       g.clear();
       g.fillStyle(0x0a0f22, 1);
-      g.fillRoundedRect(x, 30, w, h, 8);
-      const fillW = Math.max(6, w * Phaser.Math.Clamp(pct, 0, 1));
+      g.fillRoundedRect(x, y, w, h, 9);
+      const fillW = Math.max(8, w * Phaser.Math.Clamp(pct, 0, 1));
       g.fillStyle(color, 1);
-      g.fillRoundedRect(rightAligned ? x + w - fillW : x, 30, fillW, h, 8);
+      g.fillRoundedRect(x, y, fillW, h, 9);
       g.lineStyle(2, COLORS.uiStroke, 0.9);
-      g.strokeRoundedRect(x, 30, w, h, 8);
+      g.strokeRoundedRect(x, y, w, h, 9);
     };
-    draw(this.playerHpBar, 20, this.playerHpPct, this.playerColor, false);
-    if (this.config.mode === 'survival') {
-      draw(this.enemyHpBar, GAME_WIDTH - 20 - w, 1, 0x5a3a1a, true);
-    } else {
-      draw(this.enemyHpBar, GAME_WIDTH - 20 - w, this.enemyHpPct, COLORS.enemy, true);
-    }
+    draw(
+      this.enemyHpBar,
+      STATUS_BAR_X,
+      34,
+      578,
+      this.config.mode === 'survival' ? 1 : this.enemyHpPct,
+      this.config.mode === 'survival' ? 0x5a3a1a : COLORS.enemy
+    );
+    draw(this.playerHpBar, 210, TRAY_TOP + 13, GAME_WIDTH - 210 - 24, this.playerHpPct, this.playerColor);
   }
 
   private formatTime(sec: number): string {
@@ -254,14 +305,14 @@ export class HUDScene extends Phaser.Scene {
 
   private buildEnergyBar(): void {
     this.energyBar = this.add.graphics().setDepth(DEPTH.announce - 9);
-    this.energyText = makeText(this, GAME_WIDTH / 2 + 262, GAME_HEIGHT - 132, '', 18, CSS.energy)
+    this.add
+      .image(30, ENERGY_Y + ENERGY_H / 2, 'icon-energy')
+      .setTint(COLORS.energy)
+      .setScale(1.25)
+      .setDepth(DEPTH.announce - 8);
+    this.energyText = makeText(this, 50, ENERGY_Y + ENERGY_H / 2, '', 30, CSS.energy)
       .setOrigin(0, 0.5)
       .setDepth(DEPTH.announce - 8);
-    this.add
-      .image(GAME_WIDTH / 2 - 262, GAME_HEIGHT - 132, 'icon-energy')
-      .setTint(COLORS.energy)
-      .setDepth(DEPTH.announce - 8)
-      .setOrigin(1, 0.5);
   }
 
   private redrawEnergy(): void {
@@ -271,124 +322,238 @@ export class HUDScene extends Phaser.Scene {
     if (quantized === this.lastEnergyDrawn) return;
     this.lastEnergyDrawn = quantized;
 
-    const segW = 46;
-    const gap = 5;
-    const total = e.max * segW + (e.max - 1) * gap;
-    const x0 = GAME_WIDTH / 2 - total / 2;
-    const y = GAME_HEIGHT - 142;
+    const x0 = 118;
+    const gap = 4;
+    const segW = (GAME_WIDTH - x0 - STATUS_BAR_X - (e.max - 1) * gap) / e.max;
     const g = this.energyBar;
     g.clear();
     for (let i = 0; i < e.max; i++) {
       const x = x0 + i * (segW + gap);
       g.fillStyle(0x0a0f22, 0.9);
-      g.fillRoundedRect(x, y, segW, 18, 6);
+      g.fillRoundedRect(x, ENERGY_Y, segW, ENERGY_H, 8);
       const fill = Phaser.Math.Clamp(e.current - i, 0, 1);
       if (fill > 0) {
         g.fillStyle(this.overdrive ? 0xc59bff : COLORS.energy, 1);
-        g.fillRoundedRect(x, y, Math.max(6, segW * fill), 18, 6);
+        g.fillRoundedRect(x, ENERGY_Y, Math.max(8, segW * fill), ENERGY_H, 8);
       }
       g.lineStyle(1, COLORS.uiStroke, 0.8);
-      g.strokeRoundedRect(x, y, segW, 18, 6);
+      g.strokeRoundedRect(x, ENERGY_Y, segW, ENERGY_H, 8);
     }
-    this.energyText.setText(`${Math.floor(e.current)}/${e.max}`);
+    this.energyText.setText(String(Math.floor(e.current)));
   }
 
-  /* --------------------------------- Cartas ---------------------------------- */
+  /* --------------------------------- Cartas ----------------------------------
+   * Mão de 4 cartas + fila (estilo Clash Royale): ao invocar, a carta jogada
+   * vai para o fim da fila e a próxima entra no mesmo slot. O painel
+   * "PRÓXIMA" mostra a primeira da fila.
+   */
 
   private buildCards(): void {
-    const total = UNIT_ORDER.length * (CARD_W + 6) - 6;
-    const x0 = GAME_WIDTH / 2 - total / 2 + CARD_W / 2;
+    this.queue = Phaser.Utils.Array.Shuffle([...UNIT_ORDER]);
 
-    UNIT_ORDER.forEach((key, i) => {
-      const def = UNIT_DEFS[key];
-      const x = x0 + i * (CARD_W + 6);
+    for (let slot = 0; slot < HAND_SIZE; slot++) {
+      const x = HAND_X0 + CARD_W / 2 + slot * (CARD_W + CARD_GAP);
       const container = this.add.container(x, CARD_Y).setDepth(DEPTH.announce - 5);
       const bg = this.add.graphics();
-      container.add(bg);
-
-      const tex = TextureFactory.unitTexture(key, this.playerColor);
-      const src = this.textures.get(tex).getSourceImage() as HTMLImageElement;
-      const scale = Math.min(1.1, 52 / Math.max(src.width, src.height));
-      container.add(this.add.image(0, -18, tex).setScale(scale));
-
-      container.add(
-        this.add
-          .text(0, 22, def.name, {
-            fontFamily: FONT,
-            fontSize: '13px',
-            fontStyle: 'bold',
-            color: CSS.text,
-          })
-          .setOrigin(0.5)
-      );
-      // Selo de custo.
-      const costBg = this.add.graphics();
-      costBg.fillStyle(COLORS.energy, 1);
-      costBg.fillCircle(0, 42, 12);
-      costBg.lineStyle(2, 0x0a0f22, 1);
-      costBg.strokeCircle(0, 42, 12);
-      container.add(costBg);
-      const costText = this.add
-        .text(0, 42, String(def.cost), {
+      const icon = this.add.image(0, -22, '__DEFAULT');
+      const nameText = this.add
+        .text(0, 48, '', {
           fontFamily: FONT,
-          fontSize: '15px',
+          fontSize: '17px',
+          fontStyle: 'bold',
+          color: CSS.text,
+        })
+        .setOrigin(0.5);
+      const costText = this.add
+        .text(-CARD_W / 2 + 24, -CARD_H / 2 + 24, '', {
+          fontFamily: FONT,
+          fontSize: '23px',
           fontStyle: 'bold',
           color: '#ffffff',
         })
         .setOrigin(0.5);
-      container.add(costText);
-      // Número do atalho de teclado.
-      container.add(
-        this.add
-          .text(-CARD_W / 2 + 9, -CARD_H / 2 + 8, String(i + 1), {
-            fontFamily: FONT,
-            fontSize: '12px',
-            color: CSS.textDim,
-          })
-          .setOrigin(0.5)
-      );
+      // Atalho de teclado (discreto, canto superior direito).
+      const hint = this.add
+        .text(CARD_W / 2 - 12, -CARD_H / 2 + 12, String(slot + 1), {
+          fontFamily: FONT,
+          fontSize: '12px',
+          color: CSS.textDim,
+        })
+        .setOrigin(0.5);
+      container.add([bg, icon, nameText, costText, hint]);
+
+      const view: CardView = {
+        slot,
+        key: this.queue.shift()!,
+        container,
+        bg,
+        icon,
+        nameText,
+        costText,
+        x,
+        lastState: '',
+        cycling: false,
+      };
+      this.cards.push(view);
+      this.setCardUnit(view, view.key);
 
       container.setSize(CARD_W, CARD_H);
       container.setInteractive({ useHandCursor: true });
       container.on('pointerdown', (p: Phaser.Input.Pointer) => {
-        if (this.paused || this.matchOver) return;
+        if (this.paused || this.matchOver || view.cycling) return;
         this.downPos.set(p.x, p.y);
-        this.beginPress(key);
+        this.pressedSlot = slot;
+        this.dragging = false;
       });
       container.on('pointerover', () => AudioEngine.play('ui-hover'));
+    }
 
-      const view: CardView = { key, container, bg, costText, x };
-      this.cards.push(view);
-      this.drawCard(view, false, true);
-    });
+    this.buildNextPreview();
+  }
+
+  /** Troca a carta exibida num slot (ícone, nome e custo). */
+  private setCardUnit(view: CardView, key: UnitKey): void {
+    view.key = key;
+    const def = UNIT_DEFS[key];
+    const tex = TextureFactory.unitTexture(key, this.playerColor);
+    const src = this.textures.get(tex).getSourceImage() as HTMLImageElement;
+    view.icon.setTexture(tex).setScale(Math.min(1.5, 88 / Math.max(src.width, src.height)));
+    view.nameText.setText(def.name);
+    view.costText.setText(String(def.cost));
+    view.lastState = '';
   }
 
   private drawCard(view: CardView, selected: boolean, affordable: boolean): void {
     const g = view.bg;
     g.clear();
     g.fillStyle(0x000000, 0.4);
-    g.fillRoundedRect(-CARD_W / 2 + 2, -CARD_H / 2 + 4, CARD_W, CARD_H, 14);
+    g.fillRoundedRect(-CARD_W / 2 + 3, -CARD_H / 2 + 5, CARD_W, CARD_H, 16);
     g.fillStyle(selected ? 0x1c3a63 : COLORS.uiPanel, 0.97);
-    g.fillRoundedRect(-CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 14);
-    g.lineStyle(2, selected ? this.playerColor : COLORS.uiStroke, selected ? 1 : 0.8);
-    g.strokeRoundedRect(-CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 14);
-    view.container.setAlpha(affordable ? 1 : 0.45);
+    g.fillRoundedRect(-CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 16);
+    g.fillStyle(0xffffff, 0.05);
+    g.fillRoundedRect(-CARD_W / 2 + 3, -CARD_H / 2 + 3, CARD_W - 6, CARD_H * 0.35, {
+      tl: 14,
+      tr: 14,
+      bl: 0,
+      br: 0,
+    });
+    g.lineStyle(selected ? 3 : 2, selected ? this.playerColor : COLORS.uiStroke, selected ? 1 : 0.8);
+    g.strokeRoundedRect(-CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 16);
+    // Selo de custo (canto superior esquerdo, estilo gota de elixir).
+    g.fillStyle(COLORS.energy, 1);
+    g.fillCircle(-CARD_W / 2 + 24, -CARD_H / 2 + 24, 19);
+    g.lineStyle(2.5, 0x0a0f22, 1);
+    g.strokeCircle(-CARD_W / 2 + 24, -CARD_H / 2 + 24, 19);
+
+    view.container.setScale(selected ? 1.05 : 1);
+    if (!view.cycling) view.container.setAlpha(affordable ? 1 : 0.5);
     view.costText.setColor(affordable ? '#ffffff' : CSS.danger);
   }
 
   private updateCardAffordability(): void {
     const e = this.game_.playerEnergy.current;
     for (const c of this.cards) {
-      this.drawCard(c, this.selected === c.key, UNIT_DEFS[c.key].cost <= e);
+      const selected = this.selectedSlot === c.slot;
+      const affordable = UNIT_DEFS[c.key].cost <= e;
+      const state = `${selected ? 'S' : '-'}${affordable ? 'A' : '-'}${c.key}`;
+      if (state === c.lastState) continue;
+      c.lastState = state;
+      this.drawCard(c, selected, affordable);
     }
+  }
+
+  /** Painel "PRÓXIMA" — primeira carta da fila do deck. */
+  private buildNextPreview(): void {
+    makeText(this, NEXT_X, NEXT_Y - NEXT_H / 2 - 16, 'PRÓXIMA', 12, CSS.textDim)
+      .setOrigin(0.5)
+      .setDepth(DEPTH.announce - 5)
+      .setLetterSpacing(1);
+
+    this.nextContainer = this.add.container(NEXT_X, NEXT_Y).setDepth(DEPTH.announce - 5);
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.4);
+    bg.fillRoundedRect(-NEXT_W / 2 + 2, -NEXT_H / 2 + 4, NEXT_W, NEXT_H, 12);
+    bg.fillStyle(COLORS.uiPanelLight, 0.85);
+    bg.fillRoundedRect(-NEXT_W / 2, -NEXT_H / 2, NEXT_W, NEXT_H, 12);
+    bg.lineStyle(2, COLORS.uiStroke, 0.7);
+    bg.strokeRoundedRect(-NEXT_W / 2, -NEXT_H / 2, NEXT_W, NEXT_H, 12);
+    bg.fillStyle(COLORS.energy, 0.95);
+    bg.fillCircle(-NEXT_W / 2 + 15, -NEXT_H / 2 + 15, 12);
+    bg.lineStyle(2, 0x0a0f22, 1);
+    bg.strokeCircle(-NEXT_W / 2 + 15, -NEXT_H / 2 + 15, 12);
+
+    this.nextIcon = this.add.image(0, 4, '__DEFAULT');
+    this.nextCostText = this.add
+      .text(-NEXT_W / 2 + 15, -NEXT_H / 2 + 15, '', {
+        fontFamily: FONT,
+        fontSize: '15px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    this.nextContainer.add([bg, this.nextIcon, this.nextCostText]);
+    this.refreshNextPreview(false);
+  }
+
+  private refreshNextPreview(bounce = true): void {
+    const key = this.queue[0];
+    if (!key) return;
+    const tex = TextureFactory.unitTexture(key, this.playerColor);
+    const src = this.textures.get(tex).getSourceImage() as HTMLImageElement;
+    this.nextIcon.setTexture(tex).setScale(Math.min(1, 54 / Math.max(src.width, src.height)));
+    this.nextCostText.setText(String(UNIT_DEFS[key].cost));
+    if (bounce) {
+      this.tweens.killTweensOf(this.nextContainer);
+      this.nextContainer.setScale(0.86);
+      this.tweens.add({
+        targets: this.nextContainer,
+        scale: 1,
+        duration: 220,
+        ease: Phaser.Math.Easing.Back.Out,
+      });
+    }
+  }
+
+  /** Ciclo do deck: a carta jogada sai, a primeira da fila entra no slot. */
+  private cycleSlot(slot: number): void {
+    const view = this.cards[slot];
+    this.queue.push(view.key);
+    const next = this.queue.shift()!;
+    view.cycling = true;
+    this.tweens.killTweensOf(view.container);
+    this.tweens.add({
+      targets: view.container,
+      y: CARD_Y + 30,
+      alpha: 0,
+      duration: 110,
+      ease: Phaser.Math.Easing.Quadratic.In,
+      onComplete: () => {
+        this.setCardUnit(view, next);
+        const affordable = UNIT_DEFS[next].cost <= this.game_.playerEnergy.current;
+        this.drawCard(view, false, affordable);
+        this.tweens.add({
+          targets: view.container,
+          y: CARD_Y,
+          alpha: affordable ? 1 : 0.5,
+          duration: 200,
+          ease: Phaser.Math.Easing.Back.Out,
+          onComplete: () => {
+            view.cycling = false;
+            view.lastState = '';
+          },
+        });
+      },
+    });
+    this.refreshNextPreview();
   }
 
   /* ------------------------- Seleção, arrasto e invocação --------------------- */
 
   private buildLaneHighlights(): void {
-    for (const y of LANE_YS) {
+    const fieldMidY = (FIELD_TOP + FIELD_BOTTOM) / 2;
+    for (const x of LANE_XS) {
       const r = this.add
-        .rectangle(GAME_WIDTH / 2, y, GAME_WIDTH - 250, 92, this.playerColor, 0.08)
+        .rectangle(x, fieldMidY, 116, FIELD_BOTTOM - FIELD_TOP, this.playerColor, 0.08)
         .setStrokeStyle(2, this.playerColor, 0.35)
         .setVisible(false)
         .setDepth(DEPTH.lanes);
@@ -403,68 +568,62 @@ export class HUDScene extends Phaser.Scene {
     });
   }
 
-  private beginPress(key: UnitKey): void {
-    // O gesto decide: soltar em cima da carta = toque (seleciona);
-    // mover além do limiar = arrasto com fantasma.
-    this.pressedKey = key;
-    this.dragging = false;
-  }
-
-  private pressedKey: UnitKey | null = null;
-
   private onPointerMove(p: Phaser.Input.Pointer): void {
     if (this.paused || this.matchOver) return;
-    if (this.pressedKey && !this.dragging && p.isDown) {
+    if (this.pressedSlot !== null && !this.dragging && p.isDown) {
       if (Phaser.Math.Distance.Between(p.x, p.y, this.downPos.x, this.downPos.y) > 14) {
         this.dragging = true;
-        this.selected = this.pressedKey;
-        const tex = TextureFactory.unitTexture(this.pressedKey, this.playerColor);
+        this.selectedSlot = this.pressedSlot;
+        const tex = TextureFactory.unitTexture(this.cards[this.pressedSlot].key, this.playerColor);
+        // Fantasma acima do dedo, para o toque não esconder a unidade.
         this.dragGhost = this.add
-          .image(p.x, p.y, tex)
+          .image(p.x, p.y - 36, tex)
+          .setScale(UNIT_VISUAL_SCALE)
           .setAlpha(0.75)
           .setDepth(DEPTH.announce);
         this.showLanes(true);
       }
     }
     if (this.dragging && this.dragGhost) {
-      this.dragGhost.setPosition(p.x, p.y);
-      this.showLanes(true, this.laneAt(p.y));
+      this.dragGhost.setPosition(p.x, p.y - 36);
+      this.showLanes(true, this.laneAt(p.x));
     }
   }
 
   private onPointerUp(p: Phaser.Input.Pointer): void {
     if (this.paused || this.matchOver) {
-      this.pressedKey = null;
+      this.pressedSlot = null;
       return;
     }
     if (this.dragging) {
       // Fim do arrasto: solta na faixa (se estiver sobre o campo).
-      const lane = this.laneAt(p.y);
+      const lane = this.laneAt(p.x);
       if (lane !== -1 && p.y > FIELD_TOP && p.y < FIELD_BOTTOM) {
         this.deploySelected(lane);
       }
       this.endDrag();
-      this.pressedKey = null;
+      this.pressedSlot = null;
       return;
     }
-    if (this.pressedKey) {
+    if (this.pressedSlot !== null) {
       // Toque na carta: alterna seleção.
-      this.toggleSelect(this.pressedKey);
-      this.pressedKey = null;
+      this.toggleSelect(this.pressedSlot);
+      this.pressedSlot = null;
       return;
     }
-    // Toque no campo com carta selecionada: invoca.
-    if (this.selected && p.y > FIELD_TOP && p.y < FIELD_BOTTOM) {
-      const lane = this.laneAt(p.y);
+    // Toque no campo com carta selecionada: invoca na faixa mais próxima.
+    if (this.selectedSlot !== null && p.y > FIELD_TOP && p.y < FIELD_BOTTOM) {
+      const lane = this.laneAt(p.x);
       if (lane !== -1) this.deploySelected(lane);
     }
   }
 
-  private laneAt(y: number): number {
+  /** Faixa mais próxima do X tocado (sem zona morta entre faixas). */
+  private laneAt(x: number): number {
     let best = -1;
-    let bestDist = 80;
-    LANE_YS.forEach((laneY, i) => {
-      const d = Math.abs(y - laneY);
+    let bestDist = Infinity;
+    LANE_XS.forEach((laneX, i) => {
+      const d = Math.abs(x - laneX);
       if (d < bestDist) {
         bestDist = d;
         best = i;
@@ -473,24 +632,28 @@ export class HUDScene extends Phaser.Scene {
     return best;
   }
 
-  private toggleSelect(key: UnitKey): void {
-    if (this.matchOver) return;
+  private toggleSelect(slot: number): void {
+    if (this.matchOver || this.cards[slot].cycling) return;
     AudioEngine.play('ui-click');
-    this.selected = this.selected === key ? null : key;
-    this.showLanes(this.selected !== null);
+    this.selectedSlot = this.selectedSlot === slot ? null : slot;
+    this.showLanes(this.selectedSlot !== null);
   }
 
   private deploySelected(lane: number): void {
-    if (!this.selected || this.matchOver) return;
-    const ok = this.game_.playerDeploy(this.selected, lane);
+    if (this.selectedSlot === null || this.matchOver) return;
+    const view = this.cards[this.selectedSlot];
+    if (view.cycling) return;
+    const ok = this.game_.playerDeploy(view.key, lane);
     if (ok) {
-      // Mantém a seleção para invocações em sequência.
-      this.showLanes(true);
+      // Carta usada vai para o fim do deck; a seleção termina (a carta mudou).
+      this.cycleSlot(view.slot);
+      this.selectedSlot = null;
+      this.showLanes(false);
     }
   }
 
   private clearSelection(): void {
-    this.selected = null;
+    this.selectedSlot = null;
     this.showLanes(false);
     this.endDrag();
   }
@@ -499,14 +662,14 @@ export class HUDScene extends Phaser.Scene {
     this.dragging = false;
     this.dragGhost?.destroy();
     this.dragGhost = null;
-    if (!this.selected) this.showLanes(false);
+    if (this.selectedSlot === null) this.showLanes(false);
   }
 
   /* --------------------------------- Anúncios --------------------------------- */
 
   private buildAnnounce(): void {
     this.announceText = this.add
-      .text(GAME_WIDTH / 2, 260, '', {
+      .text(GAME_WIDTH / 2, 460, '', {
         fontFamily: FONT,
         fontSize: '54px',
         fontStyle: 'bold',
@@ -536,10 +699,10 @@ export class HUDScene extends Phaser.Scene {
         this.tweens.add({
           targets: this.announceText,
           alpha: 0,
-          y: 240,
+          y: 440,
           delay: 1100,
           duration: 420,
-          onComplete: () => this.announceText.setY(260),
+          onComplete: () => this.announceText.setY(460),
         });
       },
     });
@@ -605,9 +768,9 @@ export class HUDScene extends Phaser.Scene {
 
   private buildTips(): void {
     const tip = this.add
-      .text(GAME_WIDTH / 2, 78, TRAINING_TIPS[0], {
+      .text(GAME_WIDTH / 2, TOP_BAR_H + 26, TRAINING_TIPS[0], {
         fontFamily: FONT,
-        fontSize: '17px',
+        fontSize: '18px',
         color: CSS.gold,
       })
       .setOrigin(0.5)

@@ -1,7 +1,8 @@
 # VANGUARDA — Guerra pelo Núcleo
 
-RTS competitivo para navegador. Invoque unidades, administre energia e destrua o
-Núcleo inimigo antes que ele destrua o seu.
+RTS competitivo para navegador, **mobile-first em modo retrato** (estilo
+Clash Royale). Invoque unidades, administre energia e destrua o Núcleo
+inimigo antes que ele destrua o seu.
 
 100% procedural: **zero assets externos** — toda a arte é desenhada em runtime e
 todo o áudio (música e efeitos) é sintetizado com Web Audio API. O jogo carrega
@@ -39,9 +40,12 @@ faz cache de todo o app shell no build.
   ```
   Abra a URL do preview, confira em DevTools → Application → Manifest/Service
   Workers, e teste "Offline" na aba Network.
-- **Landscape only:** o design é 1280x720; em celulares num navegador comum
-  (não instalado) ou no iOS (que ignora `orientation` do manifest), um aviso
-  em CSS pede para girar o aparelho quando a tela está em retrato.
+- **Retrato apenas:** o design é 720x1280 (base inimiga no topo, base do
+  jogador embaixo, faixas verticais). Em celulares num navegador comum (não
+  instalado) ou no iOS (que ignora `orientation` do manifest), um aviso em
+  CSS pede para girar o aparelho de volta ao retrato caso ele esteja em
+  paisagem. No desktop, o canvas aparece centralizado com barras pretas nas
+  laterais — igual a como Clash Royale se comporta em navegador desktop.
 - **Teste em Android real:** com o cabo USB e depuração ativada,
   `adb reverse tcp:4173 tcp:4173` e abra `http://localhost:4173` no Chrome do
   celular — `localhost` é tratado como contexto seguro, então dá pra testar
@@ -61,9 +65,9 @@ faz cache de todo o app shell no build.
   com mais HP de base quando o tempo acabar. No último minuto a **Sobrecarga**
   dobra a geração de energia dos dois lados.
 - **Energia:** regenera sozinha (máx. 10). Cada unidade custa energia.
-- **Invocar:** toque numa carta e depois numa das 3 faixas — ou arraste a carta
-  até a faixa. Teclado: `1–8` seleciona a carta, `Q/W/E` invoca na faixa
-  superior/central/inferior, `ESC` pausa.
+- **Invocar:** toque numa carta e depois numa das 3 faixas (verticais) — ou
+  arraste a carta até a faixa. Teclado: `1–8` seleciona a carta, `Q/W/E`
+  invoca na faixa esquerda/central/direita, `ESC` pausa.
 - **Modos:** Treinamento (energia acelerada, dicas), Contra IA (3 dificuldades)
   e Sobrevivência (ondas infinitas, entre no ranking do seu melhor resultado).
 

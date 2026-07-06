@@ -87,7 +87,7 @@
           transform: rotate(360deg);
         }
       }
-      /* Aviso de rotação — só em telas de toque em retrato (o jogo é landscape-only). */
+      /* Aviso de rotação — só em telas de toque em paisagem (o jogo é retrato). */
       #rotate-overlay {
         display: none;
         position: fixed;
@@ -120,17 +120,17 @@
       @keyframes rotate-hint {
         0%,
         20% {
-          transform: rotate(0deg);
+          transform: rotate(90deg);
         }
         50%,
         70% {
-          transform: rotate(90deg);
+          transform: rotate(0deg);
         }
         100% {
-          transform: rotate(90deg);
+          transform: rotate(0deg);
         }
       }
-      @media (orientation: portrait) and (pointer: coarse) {
+      @media (orientation: landscape) and (pointer: coarse) {
         #rotate-overlay {
           display: flex;
         }
@@ -145,7 +145,7 @@
     </div>
     <div id="rotate-overlay">
       <div class="phone"></div>
-      <p>Gire seu aparelho para o modo paisagem para jogar.</p>
+      <p>Gire seu aparelho para o modo retrato para jogar.</p>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

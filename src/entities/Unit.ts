@@ -7,7 +7,7 @@
  */
 import Phaser from 'phaser';
 import type { Targetable, Team, UnitDef } from '../core/types';
-import { DEPTH } from '../config/constants';
+import { DEPTH, UNIT_VISUAL_SCALE } from '../config/constants';
 import { TextureFactory } from '../gfx/TextureFactory';
 import type { GameScene } from '../scenes/GameScene';
 
@@ -49,10 +49,13 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
     this.radius = def.radius;
     this.attackTimer = def.attackCooldown * 0.5;
 
+    const vs = UNIT_VISUAL_SCALE;
     this.shadow = battle.add
-      .ellipse(0, def.radius * 0.95, def.radius * 2.1, def.radius * 0.62, 0x000000, 0.35)
+      .ellipse(0, def.radius * 0.95 * vs, def.radius * 2.1 * vs, def.radius * 0.62 * vs, 0x000000, 0.35)
       .setOrigin(0.5);
-    this.sprite = battle.add.image(0, 0, TextureFactory.unitTexture(def.key, teamColor));
+    this.sprite = battle.add
+      .image(0, 0, TextureFactory.unitTexture(def.key, teamColor))
+      .setScale(vs);
     if (team === 'enemy') this.sprite.setFlipX(true);
     this.hpBar = battle.add.graphics();
     this.hpBar.setVisible(false);
@@ -71,9 +74,9 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
     });
   }
 
-  /** Direção de avanço no eixo X. */
+  /** Direção de avanço no eixo Y (jogador sobe, inimigo desce). */
   get dir(): number {
-    return this.team === 'player' ? 1 : -1;
+    return this.team === 'player' ? -1 : 1;
   }
 
   /** Peso tático usado pela IA (custo da carta). */
@@ -105,10 +108,18 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
       return;
     }
 
-    // 3) Avanço.
-    this.x += this.dir * this.def.speed * dt;
+    // 3) Avanço. Com alvo adquirido (ex.: a base, que fica no centro),
+    // converge até ele — senão, unidades das faixas laterais passariam
+    // reto pela base e sairiam do campo.
+    if (target) {
+      const ang = Math.atan2(target.y - this.y, target.x - this.x);
+      this.x += Math.cos(ang) * this.def.speed * dt;
+      this.y += Math.sin(ang) * this.def.speed * dt;
+    } else {
+      this.y += this.dir * this.def.speed * dt;
+    }
     this.walkPhase += dt * (6 + this.def.speed * 0.06);
-    this.sprite.y = -Math.abs(Math.sin(this.walkPhase)) * 3;
+    this.sprite.y = -Math.abs(Math.sin(this.walkPhase)) * 4;
     this.sprite.rotation = Math.sin(this.walkPhase) * 0.05;
     this.setDepth(DEPTH.unitsBase + this.y);
   }
@@ -137,10 +148,11 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
   private melee(target: Targetable): void {
     if (this.lunging) return;
     this.lunging = true;
-    const lungeX = this.dir * 10;
+    // Investida na direção real do alvo (eixo Y — o corredor de avanço).
+    const lungeY = this.dir * 14;
     this.battle.tweens.add({
       targets: this.sprite,
-      x: lungeX,
+      y: lungeY,
       duration: 70,
       yoyo: true,
       ease: Phaser.Math.Easing.Quadratic.Out,
@@ -150,7 +162,7 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
       },
       onComplete: () => {
         this.lunging = false;
-        if (this.sprite.active) this.sprite.x = 0;
+        if (this.sprite.active) this.sprite.y = 0;
       },
     });
   }
@@ -181,16 +193,16 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
   }
 
   private redrawHpBar(): void {
-    const w = Phaser.Math.Clamp(this.radius * 2.2, 30, 60);
+    const w = Phaser.Math.Clamp(this.radius * 2.2 * UNIT_VISUAL_SCALE, 42, 84);
     const pct = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
-    const y = -this.radius - 18;
+    const y = -this.radius * UNIT_VISUAL_SCALE - 22;
     this.hpBar.setVisible(pct < 1);
     this.hpBar.clear();
-    this.hpBar.fillStyle(0x000000, 0.6);
-    this.hpBar.fillRoundedRect(-w / 2 - 1, y - 1, w + 2, 7, 3);
+    this.hpBar.fillStyle(0x000000, 0.65);
+    this.hpBar.fillRoundedRect(-w / 2 - 1.5, y - 1.5, w + 3, 10, 4);
     const color = pct > 0.55 ? 0x4dffa1 : pct > 0.25 ? 0xffc94d : 0xff4d6b;
     this.hpBar.fillStyle(color, 1);
-    this.hpBar.fillRoundedRect(-w / 2, y, Math.max(3, w * pct), 5, 2);
+    this.hpBar.fillRoundedRect(-w / 2, y, Math.max(4, w * pct), 7, 3);
   }
 
   private die(): void {

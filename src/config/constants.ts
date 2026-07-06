@@ -1,27 +1,38 @@
 /**
  * constants.ts — Constantes de layout, paleta e balanceamento global.
- * Toda dimensão de tela deriva da resolução de design 1280x720
- * (escalada com Scale.FIT para qualquer dispositivo).
+ * Toda dimensão de tela deriva da resolução de design 720x1280 (retrato,
+ * estilo Clash Royale — escalada com Scale.FIT para qualquer dispositivo).
+ * Base inimiga no topo, base do jogador embaixo, faixas verticais.
  */
 
-export const GAME_WIDTH = 1280;
-export const GAME_HEIGHT = 720;
+export const GAME_WIDTH = 720;
+export const GAME_HEIGHT = 1280;
 
 /** Pilha tipográfica do jogo (sem fontes externas — carregamento instantâneo). */
 export const FONT = '"Segoe UI", "Trebuchet MS", Verdana, sans-serif';
 
 /* ---------------------------------- Campo --------------------------------- */
 
-/** Coordenadas Y do centro de cada faixa de combate. */
-export const LANE_YS = [300, 435, 570] as const;
-export const LANE_COUNT = LANE_YS.length;
-/** Meia-altura visual de uma faixa. */
-export const LANE_HALF_HEIGHT = 56;
+/** Coordenadas X do centro de cada faixa de combate (verticais). */
+export const LANE_XS = [150, 360, 570] as const;
+export const LANE_COUNT = LANE_XS.length;
+/** Meia-largura visual de uma faixa. */
+export const LANE_HALF_WIDTH = 56;
 
-export const PLAYER_BASE_X = 118;
-export const ENEMY_BASE_X = GAME_WIDTH - 118;
+/** Extensão vertical tocável do campo (abaixo da barra superior, acima da bandeja). */
+export const FIELD_TOP = 120;
+export const FIELD_BOTTOM = 1005;
+
+export const ENEMY_BASE_Y = FIELD_TOP + 100;
+export const PLAYER_BASE_Y = FIELD_BOTTOM - 95;
 /** Unidades nascem à frente da própria base. */
-export const SPAWN_OFFSET = 92;
+export const SPAWN_OFFSET = 90;
+
+/**
+ * Escala visual das unidades no campo (só o sprite/sombra — o balanceamento
+ * de combate usa `radius` das defs e não muda). Aumenta a leitura no celular.
+ */
+export const UNIT_VISUAL_SCALE = 1.35;
 
 /* --------------------------------- Bases ---------------------------------- */
 

@@ -12,7 +12,7 @@
 import Phaser from 'phaser';
 import type { DifficultyParams, Role, UnitKey } from '../core/types';
 import { PUSH_COMBOS, ROLE_COUNTERS, UNIT_DEFS, UNIT_ORDER } from '../config/units';
-import { GAME_WIDTH, LANE_COUNT } from '../config/constants';
+import { ENEMY_BASE_Y, LANE_COUNT, PLAYER_BASE_Y } from '../config/constants';
 import { EnergySystem } from './EnergySystem';
 import type { GameScene } from '../scenes/GameScene';
 
@@ -83,7 +83,12 @@ export class BotAI {
     let threat = 0;
     for (const u of this.game.unitsOf('player')) {
       if (u.lane !== lane) continue;
-      const progress = Phaser.Math.Clamp(u.x / GAME_WIDTH, 0, 1);
+      // Progresso do jogador rumo à base inimiga (topo): 0 = na própria base, 1 = chegou.
+      const progress = Phaser.Math.Clamp(
+        (PLAYER_BASE_Y - u.y) / (PLAYER_BASE_Y - ENEMY_BASE_Y),
+        0,
+        1
+      );
       threat += u.power * (0.5 + progress);
     }
     return threat;

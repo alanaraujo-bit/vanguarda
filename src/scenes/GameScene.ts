@@ -11,14 +11,14 @@ import type { MatchConfig, Targetable, Team, UnitKey } from '../core/types';
 import {
   COLORS,
   DEPTH,
-  ENEMY_BASE_X,
+  ENEMY_BASE_Y,
   GAME_HEIGHT,
   GAME_WIDTH,
-  LANE_YS,
+  LANE_XS,
   MATCH_DURATION,
   MAX_UNITS_PER_TEAM,
   OVERDRIVE_AT,
-  PLAYER_BASE_X,
+  PLAYER_BASE_Y,
   SPAWN_OFFSET,
 } from '../config/constants';
 import { UNIT_DEFS } from '../config/units';
@@ -101,9 +101,9 @@ export class GameScene extends Phaser.Scene {
       .setDepth(DEPTH.bg);
 
     /* --------------------------------- Bases -------------------------------- */
-    const midY = LANE_YS[1];
-    this.playerBase = new Base(this, 'player', PLAYER_BASE_X, midY, this.playerColor);
-    this.enemyBase = new Base(this, 'enemy', ENEMY_BASE_X, midY, COLORS.enemy);
+    const midX = LANE_XS[1];
+    this.playerBase = new Base(this, 'player', midX, PLAYER_BASE_Y, this.playerColor);
+    this.enemyBase = new Base(this, 'enemy', midX, ENEMY_BASE_Y, COLORS.enemy);
 
     /* -------------------------------- Economia ------------------------------- */
     this.playerEnergy = new EnergySystem();
@@ -117,7 +117,7 @@ export class GameScene extends Phaser.Scene {
       this.waves = new WaveDirector(this);
       // Portal giratório marca a origem das ondas.
       const portal = this.add
-        .image(ENEMY_BASE_X, midY - 40, 'portal')
+        .image(midX, ENEMY_BASE_Y - 40, 'portal')
         .setDepth(DEPTH.bases - 1)
         .setAlpha(0.85);
       this.tweens.add({ targets: portal, rotation: Math.PI * 2, duration: 9000, repeat: -1 });
@@ -131,7 +131,7 @@ export class GameScene extends Phaser.Scene {
         loop: true,
         callback: () => {
           this.deployUnit('enemy', 'faisca', trainingLane, true);
-          trainingLane = (trainingLane + 1) % LANE_YS.length;
+          trainingLane = (trainingLane + 1) % LANE_XS.length;
         },
       });
     }
@@ -241,13 +241,13 @@ export class GameScene extends Phaser.Scene {
     }
 
     const color = team === 'player' ? this.playerColor : COLORS.enemy;
-    const baseX = team === 'player' ? PLAYER_BASE_X + SPAWN_OFFSET : ENEMY_BASE_X - SPAWN_OFFSET;
+    const baseY = team === 'player' ? PLAYER_BASE_Y - SPAWN_OFFSET : ENEMY_BASE_Y + SPAWN_OFFSET;
     const count = def.count ?? 1;
     for (let i = 0; i < count; i++) {
       this.time.delayedCall(i * 90, () => {
         if (this.matchOver) return;
-        const x = baseX + Phaser.Math.Between(-14, 14);
-        const y = LANE_YS[lane] + Phaser.Math.Between(-22, 22);
+        const x = LANE_XS[lane] + Phaser.Math.Between(-14, 14);
+        const y = baseY + Phaser.Math.Between(-22, 22);
         const unit = new Unit(this, def, team, lane, x, y, color);
         this.units.push(unit);
         this.fxRing(x, y, color, 0.5);
