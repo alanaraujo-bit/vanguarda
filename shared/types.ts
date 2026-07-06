@@ -7,8 +7,8 @@
 /** Lado do combate. */
 export type Team = 'player' | 'enemy';
 
-/** Identificadores canônicos das unidades. */
-export type UnitKey =
+/** Identificadores canônicos das tropas (unidades móveis). */
+export type TroopKey =
   | 'faisca'
   | 'agulha'
   | 'bastiao'
@@ -16,7 +16,25 @@ export type UnitKey =
   | 'lumen'
   | 'trovao'
   | 'enxame'
-  | 'tita';
+  | 'tita'
+  | 'fagulha'
+  | 'vespa'
+  | 'gelido'
+  | 'estopim'
+  | 'sentinela'
+  | 'ariete';
+
+/** Construções (cartas que viram estruturas fixas no campo). */
+export type BuildingKey = 'vigia' | 'forja' | 'dinamo';
+
+/** Tudo que existe fisicamente no campo (tropas + construções). */
+export type UnitKey = TroopKey | BuildingKey;
+
+/** Feitiços — cartas de efeito instantâneo numa área. */
+export type SpellKey = 'meteoro' | 'pulso' | 'furia';
+
+/** Qualquer carta jogável (o que circula na mão/deck). */
+export type CardKey = UnitKey | SpellKey;
 
 /** Papel tático — usado pela IA para escolher counters. */
 export type Role =
@@ -27,7 +45,11 @@ export type Role =
   | 'support'
   | 'siege'
   | 'swarm'
-  | 'super';
+  | 'super'
+  | 'flyer'
+  | 'bomber'
+  | 'breaker'
+  | 'building';
 
 export type GameMode = 'training' | 'versus' | 'survival' | 'online';
 export type Difficulty = 'easy' | 'normal' | 'hard';
@@ -38,6 +60,10 @@ export interface UnitDef {
   name: string;
   role: Role;
   desc: string;
+  /** Ponto forte (uma linha, exibido na enciclopédia). */
+  forte: string;
+  /** Ponto fraco (uma linha, exibido na enciclopédia). */
+  fraco: string;
   /** Custo em energia. */
   cost: number;
   hp: number;
@@ -63,7 +89,50 @@ export interface UnitDef {
   projectileSpeed?: number;
   /** Projétil em arco balístico (artilharia). */
   arcingProjectile?: boolean;
+  /** Construção: fica parada, perde vida com o tempo (ver lifetime). */
+  kind?: 'building';
+  /** Unidade voadora — só é atingida por quem voa ou tem targetsAir. */
+  flying?: boolean;
+  /** Consegue mirar em unidades voadoras. */
+  targetsAir?: boolean;
+  /** Só ataca construções e a base inimiga (ignora tropas). */
+  buildingsOnly?: boolean;
+  /** Investida: após andar `dist` px sem atacar, acelera e o próximo golpe multiplica o dano. */
+  charge?: { dist: number; mult: number; speedMult: number };
+  /** Escudo de energia: absorve dano antes da vida (sem transbordar para o HP). */
+  shield?: number;
+  /** Kamikaze: ao alcançar o alvo, explode (damage em splashRadius) e morre. */
+  kamikaze?: boolean;
+  /** Cada acerto aplica lentidão no alvo por N segundos. */
+  slowOnHit?: number;
+  /** Construções: vida útil em segundos (o HP drena até zerar). */
+  lifetime?: number;
+  /** Construções-fábrica: invoca `key` a cada `every` segundos. */
+  spawn?: { key: TroopKey; every: number };
+  /** Construções-gerador: energia extra por segundo para o dono. */
+  energyRate?: number;
   /** Cor de destaque própria da unidade (visor/emblema). */
+  accent: number;
+}
+
+/** Definição estática (data-driven) de um feitiço. */
+export interface SpellDef {
+  key: SpellKey;
+  name: string;
+  desc: string;
+  forte: string;
+  fraco: string;
+  /** Custo em energia. */
+  cost: number;
+  /** Raio de efeito em pixels. */
+  radius: number;
+  /** Dano em área (contra bases vale SPELL_BASE_DAMAGE_MULT). */
+  damage?: number;
+  /** Atordoa inimigos na área por N segundos (também zera investidas). */
+  stunDur?: number;
+  /** Enfurece aliados na área por N segundos (+velocidade e +cadência). */
+  rageDur?: number;
+  /** Cor de destaque (carta/FX). */
   accent: number;
 }
 
@@ -123,6 +192,8 @@ export interface ProfileData {
   xp: number;
   skin: string;
   title: string;
+  /** Deck de batalha: exatamente 8 cartas (ver DEFAULT_DECK). */
+  deck: CardKey[];
   achievements: string[];
   missions: MissionState;
   stats: {

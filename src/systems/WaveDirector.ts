@@ -12,14 +12,20 @@ import type { GameScene } from '../scenes/GameScene';
 
 /** Unidades elegíveis por peso (mais barato = mais comum). */
 const WAVE_POOL: { key: UnitKey; weight: number; minWave: number }[] = [
+  { key: 'fagulha', weight: 5, minWave: 1 },
   { key: 'faisca', weight: 5, minWave: 1 },
   { key: 'enxame', weight: 4, minWave: 1 },
   { key: 'agulha', weight: 4, minWave: 2 },
   { key: 'lamina', weight: 3, minWave: 3 },
+  { key: 'gelido', weight: 3, minWave: 3 },
   { key: 'lumen', weight: 2, minWave: 4 },
   { key: 'bastiao', weight: 3, minWave: 4 },
+  { key: 'sentinela', weight: 2, minWave: 5 },
+  { key: 'vespa', weight: 2, minWave: 6 },
   { key: 'trovao', weight: 2, minWave: 6 },
+  { key: 'estopim', weight: 2, minWave: 7 },
   { key: 'tita', weight: 1, minWave: 8 },
+  { key: 'ariete', weight: 1, minWave: 9 },
 ];
 
 export class WaveDirector {

@@ -7,7 +7,7 @@
  * da GameScene — a HUD nunca toca nas entidades diretamente.
  */
 import Phaser from 'phaser';
-import type { MatchConfig, UnitKey } from '../../shared/types';
+import type { CardKey, MatchConfig } from '../../shared/types';
 import {
   COLORS,
   CSS,
@@ -22,7 +22,7 @@ import {
   UNIT_VISUAL_SCALE,
   hex,
 } from '../../shared/constants';
-import { UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
+import { SPELL_DEFS, cardInfo, isSpellKey } from '../../shared/units';
 import { Evt, subscribe } from '../core/events';
 import { AudioEngine } from '../audio/AudioEngine';
 import { SaveManager } from '../core/SaveManager';
@@ -58,16 +58,22 @@ const TRAINING_TIPS = [
   'Toque numa carta e depois numa faixa para invocar.',
   'Você também pode ARRASTAR a carta até a faixa.',
   'Ao usar uma carta, a PRÓXIMA do deck entra na mão.',
+  'Monte seu próprio deck de 8 cartas no menu DECK.',
   'Enxames derretem tanques como o Bastião e o Titã.',
   'O Trovão limpa grupos inteiros com dano em área.',
   'A Lâmina caça atiradores e artilharia rapidamente.',
   'O Lúmen cura o aliado mais ferido ao seu alcance.',
+  'Feitiços atingem qualquer ponto — arraste até o alvo.',
+  'A Vespa voa: só atiradores e torres a alcançam.',
+  'O Aríete ignora tropas e corre para as construções.',
+  'Construções duram pouco: jogue-as na hora certa.',
+  'O Pulso atordoa e zera a investida do Aríete.',
   'Guarde energia para responder aos avanços inimigos.',
 ];
 
 interface CardView {
   slot: number;
-  key: UnitKey;
+  key: CardKey;
   container: Phaser.GameObjects.Container;
   bg: Phaser.GameObjects.Graphics;
   icon: Phaser.GameObjects.Image;
@@ -87,14 +93,14 @@ export class HUDScene extends Phaser.Scene {
 
   private cards: CardView[] = [];
   /** Cartas fora da mão, na ordem em que voltarão (fila do deck). */
-  private queue: UnitKey[] = [];
+  private queue: CardKey[] = [];
   private nextIcon!: Phaser.GameObjects.Image;
   private nextCostText!: Phaser.GameObjects.Text;
   private nextContainer!: Phaser.GameObjects.Container;
 
   private selectedSlot: number | null = null;
   private pressedSlot: number | null = null;
-  private dragGhost: Phaser.GameObjects.Image | null = null;
+  private dragGhost: Phaser.GameObjects.Container | null = null;
   private dragging = false;
   private downPos = new Phaser.Math.Vector2();
   private laneHighlights: Phaser.GameObjects.Rectangle[] = [];
@@ -348,8 +354,15 @@ export class HUDScene extends Phaser.Scene {
    * "PRÓXIMA" mostra a primeira da fila.
    */
 
+  /** Textura do ícone de uma carta (feitiço = ícone próprio; unidade = sprite do time). */
+  private cardTexture(key: CardKey): string {
+    return isSpellKey(key)
+      ? TextureFactory.spellTexture(key)
+      : TextureFactory.unitTexture(key, this.playerColor);
+  }
+
   private buildCards(): void {
-    this.queue = Phaser.Utils.Array.Shuffle([...UNIT_ORDER]);
+    this.queue = Phaser.Utils.Array.Shuffle([...SaveManager.data.deck]);
 
     for (let slot = 0; slot < HAND_SIZE; slot++) {
       const x = HAND_X0 + CARD_W / 2 + slot * (CARD_W + CARD_GAP);
@@ -412,14 +425,14 @@ export class HUDScene extends Phaser.Scene {
   }
 
   /** Troca a carta exibida num slot (ícone, nome e custo). */
-  private setCardUnit(view: CardView, key: UnitKey): void {
+  private setCardUnit(view: CardView, key: CardKey): void {
     view.key = key;
-    const def = UNIT_DEFS[key];
-    const tex = TextureFactory.unitTexture(key, this.playerColor);
+    const info = cardInfo(key);
+    const tex = this.cardTexture(key);
     const src = this.textures.get(tex).getSourceImage() as HTMLImageElement;
     view.icon.setTexture(tex).setScale(Math.min(1.5, 88 / Math.max(src.width, src.height)));
-    view.nameText.setText(def.name);
-    view.costText.setText(String(def.cost));
+    view.nameText.setText(info.name);
+    view.costText.setText(String(info.cost));
     view.lastState = '';
   }
 
@@ -454,7 +467,7 @@ export class HUDScene extends Phaser.Scene {
     const e = this.game_.playerEnergy.current;
     for (const c of this.cards) {
       const selected = this.selectedSlot === c.slot;
-      const affordable = UNIT_DEFS[c.key].cost <= e;
+      const affordable = cardInfo(c.key).cost <= e;
       const state = `${selected ? 'S' : '-'}${affordable ? 'A' : '-'}${c.key}`;
       if (state === c.lastState) continue;
       c.lastState = state;
@@ -498,10 +511,10 @@ export class HUDScene extends Phaser.Scene {
   private refreshNextPreview(bounce = true): void {
     const key = this.queue[0];
     if (!key) return;
-    const tex = TextureFactory.unitTexture(key, this.playerColor);
+    const tex = this.cardTexture(key);
     const src = this.textures.get(tex).getSourceImage() as HTMLImageElement;
     this.nextIcon.setTexture(tex).setScale(Math.min(1, 54 / Math.max(src.width, src.height)));
-    this.nextCostText.setText(String(UNIT_DEFS[key].cost));
+    this.nextCostText.setText(String(cardInfo(key).cost));
     if (bounce) {
       this.tweens.killTweensOf(this.nextContainer);
       this.nextContainer.setScale(0.86);
@@ -529,7 +542,7 @@ export class HUDScene extends Phaser.Scene {
       ease: Phaser.Math.Easing.Quadratic.In,
       onComplete: () => {
         this.setCardUnit(view, next);
-        const affordable = UNIT_DEFS[next].cost <= this.game_.playerEnergy.current;
+        const affordable = cardInfo(next).cost <= this.game_.playerEnergy.current;
         this.drawCard(view, false, affordable);
         this.tweens.add({
           targets: view.container,
@@ -568,25 +581,46 @@ export class HUDScene extends Phaser.Scene {
     });
   }
 
+  /** Fantasma de arrasto: feitiços mostram o raio REAL de efeito; unidades, o sprite. */
+  private makeDragGhost(key: CardKey): Phaser.GameObjects.Container {
+    const ghost = this.add.container(0, 0).setDepth(DEPTH.announce);
+    if (isSpellKey(key)) {
+      const def = SPELL_DEFS[key];
+      const area = this.add.graphics();
+      area.fillStyle(def.accent, 0.16);
+      area.fillCircle(0, 0, def.radius);
+      area.lineStyle(3, def.accent, 0.85);
+      area.strokeCircle(0, 0, def.radius);
+      const icon = this.add.image(0, 0, TextureFactory.spellTexture(key)).setAlpha(0.9);
+      ghost.add([area, icon]);
+    } else {
+      const img = this.add
+        .image(0, 0, TextureFactory.unitTexture(key, this.playerColor))
+        .setScale(UNIT_VISUAL_SCALE)
+        .setAlpha(0.75);
+      ghost.add(img);
+    }
+    return ghost;
+  }
+
   private onPointerMove(p: Phaser.Input.Pointer): void {
     if (this.paused || this.matchOver) return;
     if (this.pressedSlot !== null && !this.dragging && p.isDown) {
       if (Phaser.Math.Distance.Between(p.x, p.y, this.downPos.x, this.downPos.y) > 14) {
         this.dragging = true;
         this.selectedSlot = this.pressedSlot;
-        const tex = TextureFactory.unitTexture(this.cards[this.pressedSlot].key, this.playerColor);
+        const key = this.cards[this.pressedSlot].key;
         // Fantasma acima do dedo, para o toque não esconder a unidade.
-        this.dragGhost = this.add
-          .image(p.x, p.y - 36, tex)
-          .setScale(UNIT_VISUAL_SCALE)
-          .setAlpha(0.75)
-          .setDepth(DEPTH.announce);
-        this.showLanes(true);
+        this.dragGhost = this.makeDragGhost(key);
+        this.dragGhost.setPosition(p.x, p.y - 36);
+        // Feitiço mira em qualquer ponto — as faixas não importam.
+        this.showLanes(!isSpellKey(key));
       }
     }
     if (this.dragging && this.dragGhost) {
       this.dragGhost.setPosition(p.x, p.y - 36);
-      this.showLanes(true, this.laneAt(p.x));
+      const key = this.selectedSlot !== null ? this.cards[this.selectedSlot].key : null;
+      if (key && !isSpellKey(key)) this.showLanes(true, this.laneAt(p.x));
     }
   }
 
@@ -596,10 +630,10 @@ export class HUDScene extends Phaser.Scene {
       return;
     }
     if (this.dragging) {
-      // Fim do arrasto: solta na faixa (se estiver sobre o campo).
+      // Fim do arrasto: solta na faixa (o alvo do feitiço é o ponto exato do dedo).
       const lane = this.laneAt(p.x);
       if (lane !== -1 && p.y > FIELD_TOP && p.y < FIELD_BOTTOM) {
-        this.deploySelected(lane);
+        this.deploySelected(lane, p.x, p.y - 36);
       }
       this.endDrag();
       this.pressedSlot = null;
@@ -611,10 +645,11 @@ export class HUDScene extends Phaser.Scene {
       this.pressedSlot = null;
       return;
     }
-    // Toque no campo com carta selecionada: invoca na faixa mais próxima.
+    // Toque no campo com carta selecionada: invoca na faixa mais próxima
+    // (feitiço cai no ponto tocado).
     if (this.selectedSlot !== null && p.y > FIELD_TOP && p.y < FIELD_BOTTOM) {
       const lane = this.laneAt(p.x);
-      if (lane !== -1) this.deploySelected(lane);
+      if (lane !== -1) this.deploySelected(lane, p.x, p.y);
     }
   }
 
@@ -639,11 +674,11 @@ export class HUDScene extends Phaser.Scene {
     this.showLanes(this.selectedSlot !== null);
   }
 
-  private deploySelected(lane: number): void {
+  private deploySelected(lane: number, x?: number, y?: number): void {
     if (this.selectedSlot === null || this.matchOver) return;
     const view = this.cards[this.selectedSlot];
     if (view.cycling) return;
-    const ok = this.game_.playerDeploy(view.key, lane);
+    const ok = this.game_.playerDeploy(view.key, lane, x, y);
     if (ok) {
       // Carta usada vai para o fim do deck; a seleção termina (a carta mudou).
       this.cycleSlot(view.slot);

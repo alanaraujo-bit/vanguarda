@@ -10,13 +10,15 @@
  * e chamadas diretas à API pública (playerDeploy, playerEnergy...).
  */
 import Phaser from 'phaser';
-import type { Team, UnitKey } from '../../shared/types';
+import type { CardKey, SpellKey, Team, UnitKey } from '../../shared/types';
 import type { MatchResolution, MatchSnapshot, SnapshotProjectile } from '../../shared/netProtocol';
+import { STATUS_RAGE, STATUS_SLOW, STATUS_STUN } from '../../shared/netProtocol';
 import { createInitialState, applyDeployCommand, step } from '../../shared/sim/engine';
 import { Rng } from '../../shared/sim/rng';
 import type { SimEvent, SimState } from '../../shared/sim/types';
 import { NetworkController, type OnlineMatchConfig } from '../net/NetworkController';
 import {
+  BUILDING_OFFSET,
   COLORS,
   DEPTH,
   ENEMY_BASE_Y,
@@ -27,7 +29,7 @@ import {
   PLAYER_BASE_Y,
   SPAWN_OFFSET,
 } from '../../shared/constants';
-import { UNIT_DEFS } from '../../shared/units';
+import { SPELL_DEFS, UNIT_DEFS, cardInfo, isSpellKey } from '../../shared/units';
 import { DIFFICULTIES, skinById } from '../config/progression';
 import { SaveManager } from '../core/SaveManager';
 import { bus, Evt } from '../core/events';
@@ -88,8 +90,9 @@ export class GameScene extends Phaser.Scene {
   private netCurSnapshot: MatchSnapshot | null = null;
   private netCurAt = 0;
   private netTickInterval = 50;
-  /** Invocações do próprio jogador ainda não confirmadas pelo servidor (previsão otimista). */
-  private pendingDeploys: { key: UnitKey; lane: number; ghost: Unit }[] = [];
+  /** Invocações do próprio jogador ainda não confirmadas pelo servidor (previsão
+   * otimista) — feitiços não têm fantasma (ghost = null), só reserva de energia. */
+  private pendingDeploys: { key: CardKey; lane: number; ghost: Unit | null; cost: number }[] = [];
   private fxCache = new Map<number, FxSet>();
   private stars!: Phaser.GameObjects.TileSprite;
 
@@ -254,7 +257,12 @@ export class GameScene extends Phaser.Scene {
     this.applyLocalEvents(events);
 
     for (const su of state.units) {
-      this.simUnits.get(su.id)?.syncFromSim(su.x, su.y, su.hp);
+      this.simUnits.get(su.id)?.syncFromSim(su.x, su.y, su.hp, {
+        shield: su.shield,
+        slow: su.slowT > 0,
+        rage: su.rageT > 0,
+        stun: su.stunT > 0,
+      });
     }
     this.playerBase.syncFromSim(state.bases.player.hp);
     this.enemyBase.syncFromSim(state.bases.enemy.hp);
@@ -317,6 +325,9 @@ export class GameScene extends Phaser.Scene {
           }
           break;
         }
+        case 'spell':
+          this.fxSpell(e.key, e.x, e.y);
+          break;
         case 'hit':
           this.playHitFx(e.x, e.y, e.team, e.sourceKey);
           break;
@@ -397,12 +408,15 @@ export class GameScene extends Phaser.Scene {
       switch (e.type) {
         case 'spawn': {
           if (e.team === 'player') {
-            const idx = this.pendingDeploys.findIndex((p) => p.key === e.key && p.lane === e.lane);
+            const idx = this.pendingDeploys.findIndex(
+              (p) => p.key === e.key && p.lane === e.lane && p.ghost !== null
+            );
             if (idx !== -1) {
               const [pending] = this.pendingDeploys.splice(idx, 1);
-              pending.ghost.setAlpha(1);
-              pending.ghost.setPosition(e.x, e.y);
-              this.simUnits.set(e.unitId, pending.ghost);
+              const ghost = pending.ghost!;
+              ghost.setAlpha(1);
+              ghost.setPosition(e.x, e.y);
+              this.simUnits.set(e.unitId, ghost);
               break;
             }
           }
@@ -412,6 +426,15 @@ export class GameScene extends Phaser.Scene {
           this.simUnits.set(e.unitId, unit);
           this.fxRing(e.x, e.y, color, 0.5);
           AudioEngine.play('deploy');
+          break;
+        }
+        case 'spell': {
+          // Confirmação do próprio feitiço em voo (previsão otimista): baixa a reserva.
+          if (e.team === 'player') {
+            const idx = this.pendingDeploys.findIndex((p) => p.key === e.key);
+            if (idx !== -1) this.pendingDeploys.splice(idx, 1);
+          }
+          this.fxSpell(e.key, e.x, e.y);
           break;
         }
         case 'death': {
@@ -462,10 +485,12 @@ export class GameScene extends Phaser.Scene {
     if (pending) {
       this.playerEnergy.current = Math.min(
         this.playerEnergy.max,
-        this.playerEnergy.current + UNIT_DEFS[pending.key].cost
+        this.playerEnergy.current + pending.cost
       );
-      this.units = this.units.filter((u) => u !== pending.ghost);
-      pending.ghost.destroy();
+      if (pending.ghost) {
+        this.units = this.units.filter((u) => u !== pending.ghost);
+        pending.ghost.destroy();
+      }
     }
     if (reason !== 'match-over') {
       AudioEngine.play('ui-error');
@@ -488,7 +513,13 @@ export class GameScene extends Phaser.Scene {
       const pu = prevUnits.get(su.id) ?? su;
       const x = Phaser.Math.Linear(pu.x, su.x, t);
       const y = Phaser.Math.Linear(pu.y, su.y, t);
-      unit.syncFromSim(x, y, su.hp);
+      const st = su.st ?? 0;
+      unit.syncFromSim(x, y, su.hp, {
+        shield: su.sh ?? 0,
+        slow: (st & STATUS_SLOW) !== 0,
+        rage: (st & STATUS_RAGE) !== 0,
+        stun: (st & STATUS_STUN) !== 0,
+      });
     }
 
     const prevProj = new Map(prev.projectiles.map((p) => [p.id, p] as const));
@@ -507,7 +538,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createProjectileVisual(sp: ProjectileVisualSpec | SnapshotProjectile): Phaser.GameObjects.Image {
-    const texture = sp.healing ? 'proj-heal' : sp.arc ? 'proj-shell' : 'proj-bolt';
+    const texture = sp.healing
+      ? 'proj-heal'
+      : sp.arc
+        ? 'proj-shell'
+        : sp.sourceKey === 'gelido'
+          ? 'proj-shard'
+          : 'proj-bolt';
     const tint = sp.sourceKey
       ? UNIT_DEFS[sp.sourceKey].accent
       : sp.team === 'player'
@@ -517,24 +554,31 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Previsão otimista: spawna a unidade na hora, reconciliada quando o servidor confirmar. */
-  private playerDeployOnline(key: UnitKey, lane: number): boolean {
-    const def = UNIT_DEFS[key];
-    if (this.playerEnergy.current < def.cost) {
+  private playerDeployOnline(key: CardKey, lane: number, x?: number, y?: number): boolean {
+    const cost = cardInfo(key).cost;
+    if (this.playerEnergy.current < cost) {
       AudioEngine.play('ui-error');
       return false;
     }
-    this.playerEnergy.current -= def.cost;
+    this.playerEnergy.current -= cost;
 
-    const x = LANE_XS[lane];
-    const y = PLAYER_BASE_Y - SPAWN_OFFSET;
-    const ghost = new Unit(this, def, 'player', lane, x, y, this.playerColor);
-    ghost.setAlpha(0.6);
-    this.units.push(ghost);
-    this.pendingDeploys.push({ key, lane, ghost });
-    this.fxRing(x, y, this.playerColor, 0.5);
-    AudioEngine.play('deploy');
+    if (isSpellKey(key)) {
+      // Feitiço: sem fantasma — o FX chega no evento 'spell' do servidor.
+      this.pendingDeploys.push({ key, lane, ghost: null, cost });
+    } else {
+      const def = UNIT_DEFS[key];
+      const gx = LANE_XS[lane];
+      const gy =
+        def.kind === 'building' ? PLAYER_BASE_Y - BUILDING_OFFSET : PLAYER_BASE_Y - SPAWN_OFFSET;
+      const ghost = new Unit(this, def, 'player', lane, gx, gy, this.playerColor);
+      ghost.setAlpha(0.6);
+      this.units.push(ghost);
+      this.pendingDeploys.push({ key, lane, ghost, cost });
+      this.fxRing(gx, gy, this.playerColor, 0.5);
+      AudioEngine.play('deploy');
+    }
 
-    this.network?.sendDeploy(key, lane);
+    this.network?.sendDeploy(key, lane, x, y);
     return true;
   }
 
@@ -599,24 +643,29 @@ export class GameScene extends Phaser.Scene {
     if (!this.matchOver) this.network?.forfeit();
   }
 
-  /** Invocação pelo jogador (validada). @returns sucesso. */
-  playerDeploy(key: UnitKey, lane: number): boolean {
-    if (this.config.mode === 'online') return this.playerDeployOnline(key, lane);
-    return this.localDeploy('player', key, lane);
+  /** Invocação pelo jogador (validada). `x`/`y` = alvo de feitiço. @returns sucesso. */
+  playerDeploy(key: CardKey, lane: number, x?: number, y?: number): boolean {
+    if (this.config.mode === 'online') return this.playerDeployOnline(key, lane, x, y);
+    return this.localDeploy('player', key, lane, false, x, y);
   }
 
   /** Invocação no motor local (bot/ondas/treino também passam por aqui). @returns sucesso. */
-  localDeploy(team: Team, key: UnitKey, lane: number, free = false): boolean {
+  localDeploy(team: Team, key: CardKey, lane: number, free = false, x?: number, y?: number): boolean {
     if (!this.localState || !this.localRng || this.matchOver) return false;
     const events: SimEvent[] = [];
-    const result = applyDeployCommand(this.localState, { team, key, lane, free }, this.localRng, events);
+    const result = applyDeployCommand(
+      this.localState,
+      { team, key, lane, free, x, y },
+      this.localRng,
+      events
+    );
     if (!result.ok) {
       if (team === 'player') AudioEngine.play('ui-error');
       return false;
     }
     this.applyLocalEvents(events);
     if (team === 'player') {
-      this.bot?.notePlayerDeploy(UNIT_DEFS[key].role);
+      if (!isSpellKey(key)) this.bot?.notePlayerDeploy(UNIT_DEFS[key].role);
       bus.emit(Evt.UnitDeployed);
     }
     return true;
@@ -749,5 +798,86 @@ export class GameScene extends Phaser.Scene {
     fx.debris.explode(this.q(big ? 18 : 8), x, y);
     this.fxRing(x, y, color, big ? 2.6 : 1.2);
     if (!big) this.cameras.main.shake(70, 0.002);
+  }
+
+  /* ------------------------------ FX de feitiços ------------------------------ */
+
+  /** Círculo com o raio REAL do feitiço — comunica a área de efeito com precisão. */
+  private fxSpellArea(x: number, y: number, radius: number, color: number): void {
+    const area = this.add.graphics().setDepth(DEPTH.fxLow);
+    area.fillStyle(color, 0.14);
+    area.fillCircle(x, y, radius);
+    area.lineStyle(3, color, 0.8);
+    area.strokeCircle(x, y, radius);
+    this.tweens.add({
+      targets: area,
+      alpha: 0,
+      duration: 520,
+      ease: Phaser.Math.Easing.Quadratic.Out,
+      onComplete: () => area.destroy(),
+    });
+  }
+
+  private fxSpell(key: SpellKey, x: number, y: number): void {
+    const def = SPELL_DEFS[key];
+    this.fxSpellArea(x, y, def.radius, def.accent);
+
+    switch (key) {
+      case 'meteoro': {
+        // Cometa cai do alto até o ponto e detona.
+        const comet = this.add
+          .image(x + 180, y - 560, 'spell-meteoro')
+          .setDepth(DEPTH.fxHigh)
+          .setScale(1.4)
+          .setRotation(0.6);
+        this.tweens.add({
+          targets: comet,
+          x,
+          y,
+          duration: 430,
+          ease: Phaser.Math.Easing.Quadratic.In,
+          onComplete: () => {
+            comet.destroy();
+            this.fxExplosion(x, y, def.accent, true);
+            AudioEngine.play('explosion');
+            this.cameras.main.shake(240, 0.006);
+          },
+        });
+        break;
+      }
+      case 'pulso': {
+        // Descarga instantânea: anel elétrico + faíscas.
+        const fx = this.getFx(def.accent);
+        fx.spark.explode(this.q(18), x, y);
+        fx.soft.explode(this.q(8), x, y);
+        this.fxRing(x, y, def.accent, 1.8);
+        AudioEngine.play('hit-heavy');
+        this.cameras.main.shake(90, 0.003);
+        break;
+      }
+      case 'furia': {
+        // Onda de fúria: anel vermelho + partículas subindo na área.
+        const fx = this.getFx(def.accent);
+        fx.soft.explode(this.q(16), x, y);
+        this.fxRing(x, y, def.accent, 2.2);
+        const rise = this.add.particles(0, 0, 'p-spark', {
+          x: { min: x - def.radius * 0.8, max: x + def.radius * 0.8 },
+          y: { min: y - 10, max: y + def.radius * 0.6 },
+          speedY: { min: -140, max: -60 },
+          scale: { start: 0.8, end: 0 },
+          lifespan: { min: 300, max: 620 },
+          quantity: 2,
+          frequency: 40,
+          tint: def.accent,
+          blendMode: Phaser.BlendModes.ADD,
+        }).setDepth(DEPTH.fxHigh);
+        this.time.delayedCall(700, () => {
+          rise.stop();
+          this.time.delayedCall(700, () => rise.destroy());
+        });
+        AudioEngine.play('wave');
+        break;
+      }
+    }
   }
 }

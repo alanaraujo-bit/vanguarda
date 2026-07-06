@@ -14,7 +14,7 @@ import { SaveManager } from '../core/SaveManager';
 import { InstallPrompt } from '../core/InstallPrompt';
 import { levelFromXp, skinById, titleById, xpIntoLevel, DIFFICULTIES } from '../config/progression';
 import { TextureFactory } from '../gfx/TextureFactory';
-import { UNIT_ORDER } from '../../shared/units';
+import { UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
 import { UiButton, drawPanel, makeText } from '../ui/widgets';
 import { SessionManager } from '../net/SessionManager';
 import type { Difficulty, GameMode, UnitKey } from '../../shared/types';
@@ -457,30 +457,26 @@ export class MenuScene extends Phaser.Scene {
       onClick: () => this.showModes(true),
     }).setDepth(Z.ui);
 
-    // Três botões lado a lado (perfil também é acessível pelo chip do topo).
-    const rowW = 200;
-    const rowGap = 20;
-    new UiButton(this, GAME_WIDTH / 2 - (rowW + rowGap), ROW_Y, 'PERFIL', {
-      width: rowW,
-      height: 64,
-      fontSize: 15,
-      variant: 'ghost',
-      onClick: () => this.scene.start('Profile'),
-    }).setDepth(Z.ui);
-    new UiButton(this, GAME_WIDTH / 2, ROW_Y, 'RANKING', {
-      width: rowW,
-      height: 64,
-      fontSize: 15,
-      variant: 'ghost',
-      onClick: () => this.scene.start('Ranking'),
-    }).setDepth(Z.ui);
-    new UiButton(this, GAME_WIDTH / 2 + (rowW + rowGap), ROW_Y, 'ENCICLOPÉDIA', {
-      width: rowW,
-      height: 64,
-      fontSize: 15,
-      variant: 'ghost',
-      onClick: () => this.scene.start('Codex'),
-    }).setDepth(Z.ui);
+    // Quatro botões lado a lado (perfil também é acessível pelo chip do topo).
+    const rowW = 152;
+    const rowGap = 12;
+    const rowItems: { label: string; scene: string }[] = [
+      { label: 'DECK', scene: 'Deck' },
+      { label: 'PERFIL', scene: 'Profile' },
+      { label: 'RANKING', scene: 'Ranking' },
+      { label: 'CARTAS', scene: 'Codex' },
+    ];
+    const rowTotal = rowItems.length * rowW + (rowItems.length - 1) * rowGap;
+    const rowX0 = GAME_WIDTH / 2 - rowTotal / 2 + rowW / 2;
+    rowItems.forEach((item, i) => {
+      new UiButton(this, rowX0 + i * (rowW + rowGap), ROW_Y, item.label, {
+        width: rowW,
+        height: 64,
+        fontSize: 15,
+        variant: 'ghost',
+        onClick: () => this.scene.start(item.scene),
+      }).setDepth(Z.ui);
+    });
   }
 
   /* ------------------------------ Instalação -------------------------------- */
@@ -546,7 +542,9 @@ export class MenuScene extends Phaser.Scene {
   /* -------------------------------- Desfile --------------------------------- */
 
   private spawnParadeUnit(): void {
-    const key = Phaser.Utils.Array.GetRandom(UNIT_ORDER) as UnitKey;
+    // Só tropas desfilam — construções não marcham.
+    const troops = UNIT_ORDER.filter((k) => UNIT_DEFS[k].kind !== 'building');
+    const key = Phaser.Utils.Array.GetRandom(troops) as UnitKey;
     const fromLeft = Math.random() < 0.55;
     const color = fromLeft ? this.playerColor : COLORS.enemy;
     const y = PARADE_Y + Phaser.Math.Between(-6, 10);

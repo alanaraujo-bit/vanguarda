@@ -3,11 +3,25 @@
  * Singleton com API síncrona; toda mutação salva imediatamente.
  * Versão no nome da chave permite migrações futuras sem corromper saves.
  */
-import type { MatchRecord, ProfileData, SettingsData } from '../../shared/types';
+import type { CardKey, MatchRecord, ProfileData, SettingsData } from '../../shared/types';
+import { DECK_SIZE, DEFAULT_DECK, SPELL_DEFS, UNIT_DEFS } from '../../shared/units';
 import { missionsForToday, todayKey } from '../config/progression';
 
 const SAVE_KEY = 'vanguarda-save-v1';
 const HISTORY_LIMIT = 12;
+
+/** Deck válido: exatamente DECK_SIZE cartas existentes e sem repetição. */
+function sanitizeDeck(deck: unknown): CardKey[] {
+  if (!Array.isArray(deck)) return [...DEFAULT_DECK];
+  const seen = new Set<CardKey>();
+  for (const key of deck) {
+    if (typeof key !== 'string' || !(key in UNIT_DEFS || key in SPELL_DEFS)) {
+      return [...DEFAULT_DECK];
+    }
+    seen.add(key as CardKey);
+  }
+  return seen.size === DECK_SIZE ? [...seen] : [...DEFAULT_DECK];
+}
 
 function defaultSettings(): SettingsData {
   return {
@@ -25,6 +39,7 @@ function defaultProfile(): ProfileData {
     xp: 0,
     skin: 'ciano',
     title: 'recruta',
+    deck: [...DEFAULT_DECK],
     achievements: [],
     missions: { dateKey: todayKey(), progress: {}, claimed: [] },
     stats: {
@@ -71,6 +86,7 @@ class SaveManagerImpl {
       return {
         ...base,
         ...parsed,
+        deck: sanitizeDeck(parsed.deck),
         stats: { ...base.stats, ...(parsed.stats ?? {}) },
         settings: { ...base.settings, ...(parsed.settings ?? {}) },
         missions: { ...base.missions, ...(parsed.missions ?? {}) },
@@ -136,6 +152,12 @@ class SaveManagerImpl {
 
   setSkin(id: string): void {
     this.profile.skin = id;
+    this.save();
+  }
+
+  /** Salva o deck de batalha (só aceita decks válidos de DECK_SIZE cartas). */
+  setDeck(deck: CardKey[]): void {
+    this.profile.deck = sanitizeDeck(deck);
     this.save();
   }
 

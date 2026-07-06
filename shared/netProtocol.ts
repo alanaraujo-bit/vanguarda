@@ -6,14 +6,16 @@
  * renderiza e informa seus pedidos de invocação.
  */
 import type { DeployResult, SimEvent } from './sim/types';
-import type { Team, UnitKey } from './types';
+import type { CardKey, Team, UnitKey } from './types';
 
 /** Eventos que o CLIENTE emite para o servidor. */
 export interface ClientToServerEvents {
   /** Entra numa sala pelo código (Fase 0) ou fila de matchmaking (Fase 1). */
   'room:join': (payload: { roomCode: string }) => void;
-  /** Pedido de invocação — servidor valida contra a energia real da simulação. */
-  'deploy:request': (payload: { key: UnitKey; lane: number }) => void;
+  /** Pedido de invocação — servidor valida contra a energia real da simulação.
+   * `x`/`y` são o alvo de feitiços, na perspectiva de quem envia (o servidor
+   * espelha para a simulação canônica). */
+  'deploy:request': (payload: { key: CardKey; lane: number; x?: number; y?: number }) => void;
   /** Abandono explícito (botão ABANDONAR) — equivale a um forfeit imediato. */
   'match:forfeit': () => void;
 }
@@ -46,6 +48,11 @@ export interface PublicPlayerInfo {
   trophies: number;
 }
 
+/** Bits de status sincronizados por unidade (SnapshotUnit.st). */
+export const STATUS_SLOW = 1;
+export const STATUS_RAGE = 2;
+export const STATUS_STUN = 4;
+
 export interface SnapshotUnit {
   id: number;
   key: UnitKey;
@@ -55,6 +62,10 @@ export interface SnapshotUnit {
   y: number;
   hp: number;
   maxHp: number;
+  /** Escudo restante (só presente quando > 0). */
+  sh?: number;
+  /** Bitmask de status (STATUS_SLOW | STATUS_RAGE | STATUS_STUN), ausente = nenhum. */
+  st?: number;
 }
 
 export interface SnapshotProjectile {

@@ -27,6 +27,17 @@ export const ENEMY_BASE_Y = FIELD_TOP + 100;
 export const PLAYER_BASE_Y = FIELD_BOTTOM - 95;
 /** Unidades nascem à frente da própria base. */
 export const SPAWN_OFFSET = 90;
+/** Construções são erguidas mais à frente, defendendo a própria metade. */
+export const BUILDING_OFFSET = 175;
+
+/* ------------------------- Efeitos de status/feitiços ---------------------- */
+
+/** Multiplicador de velocidade/cadência sob lentidão (Gélido). */
+export const SLOW_FACTOR = 0.65;
+/** Multiplicador de velocidade/cadência sob Fúria. */
+export const RAGE_FACTOR = 1.4;
+/** Feitiços de dano acertam bases com dano reduzido (anti-spam de feitiço). */
+export const SPELL_BASE_DAMAGE_MULT = 0.5;
 
 /**
  * Escala visual das unidades no campo (só o sprite/sombra — o balanceamento

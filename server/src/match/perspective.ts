@@ -12,7 +12,7 @@ import type { Team } from '../../../shared/types.js';
 
 /** Base 'player' e base 'enemy' são simétricas em torno desse eixo — espelhar Y em torno
  * dele troca exatamente a posição de uma pela da outra (mesmo valendo para spawn/unidades). */
-const MIRROR_AXIS = PLAYER_BASE_Y + ENEMY_BASE_Y;
+export const MIRROR_AXIS = PLAYER_BASE_Y + ENEMY_BASE_Y;
 
 function otherTeam(team: Team): Team {
   return team === 'player' ? 'enemy' : 'player';
@@ -25,16 +25,21 @@ export function buildSnapshot(state: SimState, viewerTeam: Team): MatchSnapshot 
 
   const units: SnapshotUnit[] = state.units
     .filter((u) => u.alive)
-    .map((u) => ({
-      id: u.id,
-      key: u.key,
-      team: mapTeam(u.team),
-      lane: u.lane,
-      x: u.x,
-      y: mapY(u.y),
-      hp: u.hp,
-      maxHp: u.maxHp,
-    }));
+    .map((u) => {
+      const st = (u.slowT > 0 ? 1 : 0) | (u.rageT > 0 ? 2 : 0) | (u.stunT > 0 ? 4 : 0);
+      return {
+        id: u.id,
+        key: u.key,
+        team: mapTeam(u.team),
+        lane: u.lane,
+        x: u.x,
+        y: mapY(u.y),
+        hp: u.hp,
+        maxHp: u.maxHp,
+        ...(u.shield > 0 ? { sh: u.shield } : {}),
+        ...(st ? { st } : {}),
+      };
+    });
 
   const projectiles: SnapshotProjectile[] = state.projectiles.map((p) => ({
     id: p.id,
@@ -63,6 +68,8 @@ export function mapEvents(events: SimEvent[], viewerTeam: Team): SimEvent[] {
   return events.map((e): SimEvent => {
     switch (e.type) {
       case 'spawn':
+        return { ...e, team: mapTeam(e.team), y: mapY(e.y) };
+      case 'spell':
         return { ...e, team: mapTeam(e.team), y: mapY(e.y) };
       case 'death':
         return { ...e, team: mapTeam(e.team), y: mapY(e.y) };

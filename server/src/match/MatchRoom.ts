@@ -11,8 +11,8 @@ import { createInitialState, step } from '../../../shared/sim/engine.js';
 import { Rng } from '../../../shared/sim/rng.js';
 import type { DeployCommand, SimState } from '../../../shared/sim/types.js';
 import { computeTrophyDelta } from '../../../shared/trophies.js';
-import type { Team, UnitKey } from '../../../shared/types.js';
-import { buildSnapshot, mapEvents } from './perspective.js';
+import type { CardKey, Team } from '../../../shared/types.js';
+import { MIRROR_AXIS, buildSnapshot, mapEvents } from './perspective.js';
 import { finalizeMatch } from './persist.js';
 
 const START_DELAY_MS = 1500;
@@ -121,14 +121,23 @@ export class MatchRoom {
     this.tickTimer = setInterval(() => this.tick(), TICK_MS);
   }
 
-  handleDeploy(socket: Socket, key: UnitKey, lane: number): void {
+  handleDeploy(socket: Socket, key: CardKey, lane: number, x?: number, y?: number): void {
     const slot = this.slots.find((s) => s.socket.id === socket.id);
     if (!slot) return;
     if (this.status !== 'active') {
       socket.emit('deploy:rejected', { reason: 'match-over' });
       return;
     }
-    slot.pendingCommands.push({ team: slot.simTeam, key, lane });
+    // O alvo de feitiço chega na perspectiva de quem enviou (ele sempre se vê
+    // como 'player', embaixo) — o lado canônico 'enemy' precisa do Y espelhado.
+    const targetY = typeof y === 'number' && slot.simTeam === 'enemy' ? MIRROR_AXIS - y : y;
+    slot.pendingCommands.push({
+      team: slot.simTeam,
+      key,
+      lane,
+      ...(typeof x === 'number' ? { x } : {}),
+      ...(typeof targetY === 'number' ? { y: targetY } : {}),
+    });
   }
 
   private tick(): void {

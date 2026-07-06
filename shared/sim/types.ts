@@ -4,7 +4,7 @@
  * servidor (autoridade) e pelo cliente (renderer), então precisa ser
  * serializável (JSON-safe) de ponta a ponta.
  */
-import type { Team, UnitKey } from '../types';
+import type { CardKey, SpellKey, Team, UnitKey } from '../types';
 
 export interface SimUnit {
   id: number;
@@ -20,6 +20,18 @@ export interface SimUnit {
   attackTimer: number;
   /** Investida corpo-a-corpo em andamento — o dano é aplicado quando `remaining` chega a 0. */
   meleeSwing: MeleeSwing | null;
+  /** Escudo de energia restante (Sentinela) — absorve dano antes do HP. */
+  shield: number;
+  /** Segundos restantes de atordoamento (Pulso) — não age enquanto > 0. */
+  stunT: number;
+  /** Segundos restantes de lentidão (Gélido). */
+  slowT: number;
+  /** Segundos restantes de Fúria. */
+  rageT: number;
+  /** Distância acumulada desde o último ataque (investida do Aríete). */
+  chargeDist: number;
+  /** Cronômetro até a próxima invocação (construções-fábrica). */
+  spawnT: number;
 }
 
 export interface MeleeSwing {
@@ -102,14 +114,20 @@ export interface PendingSpawn {
   key: UnitKey;
   lane: number;
   delay: number;
+  /** Posição explícita (construções-fábrica invocam na própria porta). */
+  x?: number;
+  y?: number;
 }
 
 export interface DeployCommand {
   team: Team;
-  key: UnitKey;
+  key: CardKey;
   lane: number;
   /** Invocação gratuita (bot/ondas) — pula a checagem/gasto de energia. */
   free?: boolean;
+  /** Alvo do feitiço em coordenadas de campo (ignorado por tropas/construções). */
+  x?: number;
+  y?: number;
 }
 
 export interface DeployResult {
@@ -119,6 +137,7 @@ export interface DeployResult {
 
 export type SimEvent =
   | { type: 'spawn'; unitId: number; key: UnitKey; team: Team; lane: number; x: number; y: number }
+  | { type: 'spell'; key: SpellKey; team: Team; x: number; y: number }
   | { type: 'death'; unitId: number; team: Team; x: number; y: number }
   | { type: 'hit'; x: number; y: number; team: Team; sourceKey: UnitKey | null }
   | { type: 'heal-fx'; x: number; y: number }

@@ -8,7 +8,7 @@ import { verifyAccessToken } from '../auth/tokens.js';
 import { db } from '../db/client.js';
 import { profiles } from '../db/schema.js';
 import { RoomRegistry } from './RoomRegistry.js';
-import type { UnitKey } from '../../../shared/types.js';
+import type { CardKey } from '../../../shared/types.js';
 
 interface SocketData {
   userId: string;
@@ -52,9 +52,9 @@ export function registerMatchGateway(io: SocketIOServer): void {
       if (ok) data.roomCode = roomCode;
     });
 
-    socket.on('deploy:request', ({ key, lane }: { key: UnitKey; lane: number }) => {
+    socket.on('deploy:request', ({ key, lane, x, y }: { key: CardKey; lane: number; x?: number; y?: number }) => {
       if (!data.roomCode) return;
-      RoomRegistry.get(data.roomCode)?.handleDeploy(socket, key, lane);
+      RoomRegistry.get(data.roomCode)?.handleDeploy(socket, key, lane, x, y);
     });
 
     socket.on('match:forfeit', () => {

@@ -8,8 +8,8 @@
  * o time inimigo espelha o sprite em runtime.
  */
 import Phaser from 'phaser';
-import type { UnitDef, UnitKey } from '../../shared/types';
-import { UNIT_DEFS } from '../../shared/units';
+import type { SpellKey, UnitDef, UnitKey } from '../../shared/types';
+import { SPELL_DEFS, UNIT_DEFS } from '../../shared/units';
 import {
   COLORS,
   FIELD_BOTTOM,
@@ -45,6 +45,11 @@ export const TextureFactory = {
     return `base-${teamColor.toString(16)}`;
   },
 
+  /** Chave da textura do ícone de um feitiço (neutra — não depende de time). */
+  spellTexture(key: SpellKey): string {
+    return `spell-${key}`;
+  },
+
   /** Gera texturas neutras (uma única vez, no Boot). */
   createShared(scene: Phaser.Scene): void {
     if (scene.textures.exists('p-soft')) return;
@@ -53,6 +58,7 @@ export const TextureFactory = {
     this.stars(scene);
     this.arena(scene);
     this.icons(scene);
+    this.spellIcons(scene);
     this.portal(scene);
   },
 
@@ -136,6 +142,100 @@ export const TextureFactory = {
     g.fillRoundedRect(7, 3, 6, 14, 2);
     g.fillRoundedRect(3, 7, 14, 6, 2);
     g.generateTexture('proj-heal', 20, 20);
+    g.destroy();
+
+    // Estilhaço de gelo (Gélido) — cristal alongado apontando para a direita.
+    g = makeGraphics(scene);
+    g.fillStyle(0xffffff, 0.4);
+    g.fillEllipse(13, 7, 24, 10);
+    g.fillStyle(0xffffff, 1);
+    g.beginPath();
+    g.moveTo(24, 7);
+    g.lineTo(14, 2);
+    g.lineTo(2, 7);
+    g.lineTo(14, 12);
+    g.closePath();
+    g.fillPath();
+    g.fillStyle(0xffffff, 0.55);
+    g.fillTriangle(14, 2, 10, 7, 14, 12);
+    g.generateTexture('proj-shard', 26, 14);
+    g.destroy();
+  },
+
+  /* ---------------------------- Ícones de feitiço ---------------------------
+   * Desenhados já na cor de acento do feitiço (cartas/enciclopédia/FX).
+   */
+
+  spellIcons(scene: Phaser.Scene): void {
+    const S = 64;
+    const c = S / 2;
+
+    // Meteoro — bola de fogo caindo em diagonal com cauda flamejante.
+    let g = makeGraphics(scene);
+    let acc = SPELL_DEFS.meteoro.accent;
+    g.fillStyle(acc, 0.25);
+    g.fillEllipse(c + 6, c + 6, 40, 40);
+    // Cauda.
+    g.fillStyle(acc, 0.5);
+    g.fillTriangle(6, 6, c + 10, c - 2, c - 2, c + 10);
+    g.fillStyle(shade(acc, 0.35), 0.85);
+    g.fillTriangle(12, 12, c + 6, c + 2, c + 2, c + 6);
+    // Núcleo rochoso.
+    g.fillStyle(OUTLINE, 1);
+    g.fillCircle(c + 8, c + 8, 16);
+    g.fillStyle(acc, 1);
+    g.fillCircle(c + 8, c + 8, 13);
+    g.fillStyle(shade(acc, 0.45), 1);
+    g.fillCircle(c + 4, c + 4, 6);
+    g.fillStyle(shade(acc, -0.35), 0.9);
+    g.fillCircle(c + 14, c + 12, 3.4);
+    g.fillCircle(c + 6, c + 14, 2.4);
+    g.generateTexture('spell-meteoro', S, S);
+    g.destroy();
+
+    // Pulso — raio dentro de um anel de descarga.
+    g = makeGraphics(scene);
+    acc = SPELL_DEFS.pulso.accent;
+    g.fillStyle(acc, 0.18);
+    g.fillCircle(c, c, 28);
+    g.lineStyle(4, acc, 0.9);
+    g.strokeCircle(c, c, 24);
+    g.lineStyle(2, acc, 0.4);
+    g.strokeCircle(c, c, 30);
+    g.fillStyle(0xffffff, 1);
+    g.beginPath();
+    g.moveTo(c + 7, c - 20);
+    g.lineTo(c - 10, c + 3);
+    g.lineTo(c - 1, c + 3);
+    g.lineTo(c - 6, c + 20);
+    g.lineTo(c + 11, c - 3);
+    g.lineTo(c + 2, c - 3);
+    g.closePath();
+    g.fillPath();
+    g.generateTexture('spell-pulso', S, S);
+    g.destroy();
+
+    // Fúria — chama tripla subindo (aliados enfurecidos).
+    g = makeGraphics(scene);
+    acc = SPELL_DEFS.furia.accent;
+    g.fillStyle(acc, 0.2);
+    g.fillEllipse(c, c + 6, 48, 40);
+    const flame = (x: number, baseY: number, w: number, h: number, color: number, alpha: number) => {
+      g.fillStyle(color, alpha);
+      g.beginPath();
+      g.moveTo(x, baseY - h); // ponta
+      g.lineTo(x + w / 2, baseY - h * 0.35);
+      g.lineTo(x + w * 0.32, baseY);
+      g.lineTo(x - w * 0.32, baseY);
+      g.lineTo(x - w / 2, baseY - h * 0.35);
+      g.closePath();
+      g.fillPath();
+    };
+    flame(c - 16, c + 22, 16, 26, acc, 0.85);
+    flame(c + 16, c + 22, 16, 26, acc, 0.85);
+    flame(c, c + 24, 22, 42, acc, 1);
+    flame(c, c + 22, 12, 24, shade(acc, 0.5), 1);
+    g.generateTexture('spell-furia', S, S);
     g.destroy();
   },
 
@@ -601,6 +701,328 @@ export const TextureFactory = {
         g.fillTriangle(c - 4, c - 38, c, c - 48, c + 4, c - 38);
         g.fillTriangle(c + 3, c - 38, c + 7, c - 46, c + 11, c - 38);
         eyes(c + 1, c - 30, 2.6, 5, true);
+        break;
+      }
+      case 'fagulha': {
+        // Mini-bot descartável: bolinha com olho único e antena faiscante.
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c, c + 2, 12);
+        g.fillStyle(body, 1);
+        g.fillCircle(c, c + 2, 9.5);
+        g.fillStyle(dark, 1);
+        g.fillEllipse(c - 2, c + 7, 12, 6);
+        // Antena com fagulha.
+        g.lineStyle(2, dark, 1);
+        g.lineBetween(c, c - 7, c - 3, c - 15);
+        g.fillStyle(acc, 1);
+        g.fillTriangle(c - 3, c - 21, c - 6.5, c - 14, c + 0.5, c - 14);
+        g.fillTriangle(c - 3, c - 9, c - 6.5, c - 16, c + 0.5, c - 16);
+        // Olho único animado.
+        g.fillStyle(0xffffff, 1);
+        g.fillCircle(c + 3.5, c, 4.2);
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c + 5, c, 2);
+        // Pezinhos.
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 8, c + 12, 6, 4, 2);
+        g.fillRoundedRect(c + 2, c + 12, 6, 4, 2);
+        break;
+      }
+      case 'vespa': {
+        // Caça voadora: corpo em gota horizontal, listras, asas e ferrão.
+        // Asas (translúcidas, acima do corpo).
+        g.fillStyle(0xffffff, 0.35);
+        g.fillEllipse(c - 8, c - 14, 26, 9);
+        g.fillEllipse(c + 4, c - 16, 22, 8);
+        g.lineStyle(1.5, lite, 0.6);
+        g.strokeEllipse(c - 8, c - 14, 26, 9);
+        // Corpo.
+        g.fillStyle(OUTLINE, 1);
+        g.fillEllipse(c - 2, c + 2, 42, 26);
+        g.fillStyle(body, 1);
+        g.fillEllipse(c - 2, c + 2, 36, 21);
+        // Listras de vespa (acento).
+        g.fillStyle(acc, 0.9);
+        g.fillRoundedRect(c - 14, c - 6, 6, 17, 3);
+        g.fillRoundedRect(c - 4, c - 7, 6, 19, 3);
+        // Ferrão.
+        g.fillStyle(OUTLINE, 1);
+        g.fillTriangle(c + 15, c - 3, c + 28, c + 2, c + 15, c + 8);
+        g.fillStyle(lite, 1);
+        g.fillTriangle(c + 16, c - 1, c + 25, c + 2, c + 16, c + 6);
+        // Olhos bravos.
+        eyes(c + 7, c - 2, 2.4, 4, true);
+        break;
+      }
+      case 'gelido': {
+        // Mago de gelo: manto cônico, capuz e cajado de cristal.
+        g.fillStyle(acc, 0.18);
+        g.fillCircle(c, c, def.radius + 9);
+        // Manto.
+        g.fillStyle(OUTLINE, 1);
+        g.beginPath();
+        g.moveTo(c - 3, c - 22);
+        g.lineTo(c + 13, c + 18);
+        g.lineTo(c - 19, c + 18);
+        g.closePath();
+        g.fillPath();
+        g.fillStyle(body, 1);
+        g.beginPath();
+        g.moveTo(c - 3, c - 18);
+        g.lineTo(c + 10, c + 15);
+        g.lineTo(c - 16, c + 15);
+        g.closePath();
+        g.fillPath();
+        g.fillStyle(dark, 1);
+        g.fillTriangle(c - 3, c + 2, c + 8, c + 15, c - 14, c + 15);
+        // Capuz com rosto na sombra.
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c - 3, c - 14, 9.5);
+        g.fillStyle(dark, 1);
+        g.fillCircle(c - 2, c - 14, 7.5);
+        eyes(c, c - 14, 2, 3.6);
+        // Cajado de cristal.
+        g.lineStyle(3, dark, 1);
+        g.lineBetween(c + 10, c + 16, c + 16, c - 10);
+        g.fillStyle(acc, 1);
+        g.beginPath();
+        g.moveTo(c + 16, c - 24);
+        g.lineTo(c + 22, c - 14);
+        g.lineTo(c + 16, c - 4);
+        g.lineTo(c + 10, c - 14);
+        g.closePath();
+        g.fillPath();
+        g.fillStyle(0xffffff, 0.7);
+        g.fillTriangle(c + 16, c - 22, c + 13, c - 14, c + 16, c - 6);
+        // Cristaizinhos na base.
+        g.fillStyle(acc, 0.9);
+        g.fillTriangle(c - 18, c + 18, c - 15, c + 10, c - 12, c + 18);
+        g.fillTriangle(c - 11, c + 18, c - 9, c + 12, c - 7, c + 18);
+        break;
+      }
+      case 'estopim': {
+        // Bomba corredora: esfera com pavio aceso e olhos apreensivos.
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c, c + 3, 17);
+        g.fillStyle(body, 1);
+        g.fillCircle(c, c + 3, 14);
+        g.fillStyle(dark, 1);
+        g.fillEllipse(c - 3, c + 10, 20, 10);
+        g.fillStyle(lite, 0.6);
+        g.fillEllipse(c - 5, c - 3, 8, 6);
+        // Tampa e pavio.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 5, c - 16, 10, 6, 2);
+        g.lineStyle(2.5, dark, 1);
+        g.beginPath();
+        g.moveTo(c, c - 16);
+        g.lineTo(c + 4, c - 22);
+        g.lineTo(c + 10, c - 22);
+        g.strokePath();
+        // Fagulha do pavio (estrela).
+        g.fillStyle(acc, 1);
+        g.fillTriangle(c + 10, c - 28, c + 6, c - 20, c + 14, c - 20);
+        g.fillTriangle(c + 10, c - 14, c + 6, c - 22, c + 14, c - 22);
+        g.fillStyle(0xffffff, 0.9);
+        g.fillCircle(c + 10, c - 21, 2);
+        // Olhos grandes e apreensivos.
+        eyes(c + 4, c - 1, 3.2, 5.5);
+        // Perninhas em disparada.
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 12, c + 18, 9, 5, 2);
+        g.fillRoundedRect(c + 4, c + 18, 9, 5, 2);
+        break;
+      }
+      case 'sentinela': {
+        // Duelista com escudo de energia frontal.
+        // Aura do escudo (frente).
+        g.fillStyle(acc, 0.22);
+        g.fillEllipse(c + 16, c, 22, 46);
+        // Corpo.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 22, c - 18, 38, 40, 11);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 19, c - 15, 32, 34, 9);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 19, c + 5, 32, 14, { tl: 0, tr: 0, bl: 9, br: 9 });
+        // Elmo.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 13, c - 30, 22, 15, 6);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 11, c - 28, 18, 11, 5);
+        g.fillStyle(acc, 1);
+        g.fillTriangle(c - 2, c - 36, c - 6, c - 28, c + 2, c - 28);
+        // Visor.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 8, c - 25, 14, 6, 3);
+        g.fillStyle(acc, 0.95);
+        g.fillRoundedRect(c - 6, c - 24, 10, 4, 2);
+        // Escudo de energia (placa frontal).
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c + 10, c - 24, 16, 48, 7);
+        g.fillStyle(acc, 0.85);
+        g.fillRoundedRect(c + 13, c - 21, 10, 42, 5);
+        g.fillStyle(0xffffff, 0.5);
+        g.fillRoundedRect(c + 14, c - 18, 4, 36, 2);
+        // Punho traseiro.
+        g.fillStyle(dark, 1);
+        g.fillCircle(c - 21, c + 6, 7);
+        break;
+      }
+      case 'ariete': {
+        // Aríete: cabeçote de demolição sobre rodas, chifre de impacto.
+        // Rodas.
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c - 20, c + 20, 8);
+        g.fillCircle(c - 2, c + 20, 8);
+        g.fillCircle(c + 16, c + 20, 8);
+        g.fillStyle(dark, 1);
+        g.fillCircle(c - 20, c + 20, 5);
+        g.fillCircle(c - 2, c + 20, 5);
+        g.fillCircle(c + 16, c + 20, 5);
+        // Chassi.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 30, c - 6, 52, 24, 8);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 27, c - 3, 46, 18, 6);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 27, c + 6, 46, 9, { tl: 0, tr: 0, bl: 6, br: 6 });
+        // Cabeçote de impacto (frente).
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c + 12, c - 16, 18, 32, 6);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c + 15, c - 13, 12, 26, 4);
+        // Chifre.
+        g.fillStyle(OUTLINE, 1);
+        g.fillTriangle(c + 26, c - 8, c + 38, c, c + 26, c + 8);
+        g.fillStyle(acc, 1);
+        g.fillTriangle(c + 27, c - 5, c + 35, c, c + 27, c + 5);
+        // Cabine com olhos determinados.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 18, c - 22, 24, 18, 6);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 16, c - 20, 20, 14, 5);
+        eyes(c - 6, c - 13, 2.4, 4.4, true);
+        // Rebites do acento.
+        g.fillStyle(acc, 0.9);
+        g.fillCircle(c - 22, c + 1, 2.2);
+        g.fillCircle(c - 12, c + 1, 2.2);
+        g.fillCircle(c - 2, c + 1, 2.2);
+        break;
+      }
+      case 'vigia': {
+        // Torre Vigia: pedestal + coluna + cabeça giratória com canhão.
+        // Pedestal.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 24, c + 14, 48, 14, 6);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 20, c + 16, 40, 10, 5);
+        // Coluna.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 13, c - 12, 26, 30, 6);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 10, c - 9, 20, 25, 5);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 10, c + 4, 20, 12, { tl: 0, tr: 0, bl: 5, br: 5 });
+        // Luzes da coluna.
+        g.fillStyle(acc, 0.9);
+        g.fillCircle(c, c - 2, 2.2);
+        g.fillCircle(c, c + 6, 2.2);
+        // Cabeça com canhão.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 16, c - 30, 32, 20, 8);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 13, c - 27, 26, 14, 6);
+        // Cano.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c + 10, c - 24, 18, 8, 3);
+        g.fillStyle(acc, 1);
+        g.fillRoundedRect(c + 12, c - 22, 14, 4, 2);
+        // Olho-sensor.
+        g.fillStyle(0xffffff, 1);
+        g.fillCircle(c + 3, c - 20, 4.5);
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c + 4.5, c - 20, 2.2);
+        // Antena.
+        g.lineStyle(2, dark, 1);
+        g.lineBetween(c - 8, c - 30, c - 12, c - 38);
+        g.fillStyle(acc, 1);
+        g.fillCircle(c - 12, c - 39, 2.6);
+        break;
+      }
+      case 'forja': {
+        // Forja: cabana-fábrica com telhado, chaminé e portão incandescente.
+        // Base.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 26, c + 16, 52, 12, 5);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 22, c + 18, 44, 8, 4);
+        // Paredes.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 22, c - 8, 44, 28, 6);
+        g.fillStyle(body, 1);
+        g.fillRoundedRect(c - 19, c - 5, 38, 23, 5);
+        // Telhado.
+        g.fillStyle(OUTLINE, 1);
+        g.fillTriangle(c - 27, c - 4, c, c - 28, c + 27, c - 4);
+        g.fillStyle(dark, 1);
+        g.fillTriangle(c - 22, c - 6, c, c - 25, c + 22, c - 6);
+        g.fillStyle(acc, 0.85);
+        g.fillTriangle(c - 10, c - 8, c, c - 20, c + 10, c - 8);
+        // Chaminé com fumaça.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c + 8, c - 30, 10, 14, 3);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c + 10, c - 28, 6, 11, 2);
+        g.fillStyle(0xffffff, 0.25);
+        g.fillCircle(c + 14, c - 34, 4);
+        g.fillCircle(c + 19, c - 39, 3);
+        // Portão incandescente (de onde saem as Fagulhas).
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 9, c - 2, 18, 20, { tl: 8, tr: 8, bl: 0, br: 0 });
+        g.fillStyle(acc, 0.9);
+        g.fillRoundedRect(c - 6, c + 1, 12, 17, { tl: 6, tr: 6, bl: 0, br: 0 });
+        g.fillStyle(0xffffff, 0.75);
+        g.fillCircle(c, c + 10, 3);
+        // Luzes laterais.
+        g.fillStyle(acc, 0.9);
+        g.fillCircle(c - 14, c + 4, 2.2);
+        g.fillCircle(c + 14, c + 4, 2.2);
+        break;
+      }
+      case 'dinamo': {
+        // Dínamo: bobina geradora com orbe de energia no topo.
+        // Base.
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 22, c + 14, 44, 14, 6);
+        g.fillStyle(dark, 1);
+        g.fillRoundedRect(c - 18, c + 16, 36, 10, 5);
+        // Bobina (anéis empilhados).
+        g.fillStyle(OUTLINE, 1);
+        g.fillRoundedRect(c - 12, c - 16, 24, 32, 7);
+        for (let i = 0; i < 4; i++) {
+          const ry = c - 12 + i * 8;
+          g.fillStyle(i % 2 === 0 ? body : dark, 1);
+          g.fillRoundedRect(c - 9, ry, 18, 6, 3);
+        }
+        // Enrolamento do acento.
+        g.lineStyle(2, acc, 0.9);
+        g.lineBetween(c - 9, c - 8, c + 9, c - 4);
+        g.lineBetween(c - 9, c, c + 9, c + 4);
+        g.lineBetween(c - 9, c + 8, c + 9, c + 12);
+        // Orbe de energia.
+        g.fillStyle(acc, 0.3);
+        g.fillCircle(c, c - 26, 13);
+        g.fillStyle(OUTLINE, 1);
+        g.fillCircle(c, c - 26, 9);
+        g.fillStyle(acc, 1);
+        g.fillCircle(c, c - 26, 6.5);
+        g.fillStyle(0xffffff, 0.8);
+        g.fillCircle(c - 2, c - 28, 2.4);
+        // Raio estampado na base.
+        g.fillStyle(acc, 0.9);
+        g.fillTriangle(c - 2, c + 17, c - 6, c + 24, c + 1, c + 22);
+        g.fillTriangle(c + 2, c + 26, c + 6, c + 19, c - 1, c + 21);
         break;
       }
     }

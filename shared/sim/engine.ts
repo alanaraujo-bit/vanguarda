@@ -1,26 +1,35 @@
 /**
  * shared/sim/engine.ts — Regras de combate, sem Phaser (alvo por faixa,
  * investida corpo-a-corpo, projétil reto/em arco, torreta, energia,
- * cronômetro/Sobrecarga) sobre um estado plano e serializável. É a mesma
- * função que roda no servidor (autoridade, modo online) e no cliente
- * (modos offline: versus bot/treino/sobrevivência) — GameScene/Unit/Base só
- * espelham esse estado; nenhum deles decide regra de combate.
+ * cronômetro/Sobrecarga, voo/anti-aéreo, escudo, investida do Aríete,
+ * kamikaze, lentidão/atordoo/Fúria, construções e feitiços) sobre um estado
+ * plano e serializável. É a mesma função que roda no servidor (autoridade,
+ * modo online) e no cliente (modos offline: versus bot/treino/sobrevivência)
+ * — GameScene/Unit/Base só espelham esse estado; nenhum deles decide regra
+ * de combate.
  */
-import type { Team, UnitKey } from '../types';
-import { UNIT_DEFS } from '../units';
+import type { SpellDef, Team, UnitDef, UnitKey } from '../types';
+import { SPELL_DEFS, UNIT_DEFS, isSpellKey } from '../units';
 import {
   BASE_HP,
   BASE_RADIUS,
+  BUILDING_OFFSET,
   ENEMY_BASE_Y,
   ENERGY_MAX,
   ENERGY_REGEN,
   ENERGY_START,
+  FIELD_BOTTOM,
+  FIELD_TOP,
+  GAME_WIDTH,
   LANE_XS,
   MATCH_DURATION,
   MAX_UNITS_PER_TEAM,
   OVERDRIVE_AT,
   PLAYER_BASE_Y,
+  RAGE_FACTOR,
+  SLOW_FACTOR,
   SPAWN_OFFSET,
+  SPELL_BASE_DAMAGE_MULT,
   TURRET_COOLDOWN,
   TURRET_DAMAGE,
   TURRET_RANGE,
@@ -117,6 +126,13 @@ function resolveTarget(state: SimState, ref: TargetRef): ResolvedTarget | null {
 
 /* ----------------------------------- Alvos/IA ------------------------------------ */
 
+/** A unidade consegue mirar neste alvo? (regras de voo e de "só construções"). */
+function canEngage(attacker: UnitDef, target: UnitDef): boolean {
+  if (target.flying && !attacker.flying && !attacker.targetsAir) return false;
+  if (attacker.buildingsOnly && target.kind !== 'building') return false;
+  return true;
+}
+
 function acquireTarget(state: SimState, unit: SimUnit): TargetRef | null {
   const def = UNIT_DEFS[unit.key];
   const foeTeam = otherTeam(unit.team);
@@ -124,6 +140,7 @@ function acquireTarget(state: SimState, unit: SimUnit): TargetRef | null {
   let bestGap = Infinity;
   for (const f of state.units) {
     if (!f.alive || f.team !== foeTeam || f.lane !== unit.lane) continue;
+    if (!canEngage(def, UNIT_DEFS[f.key])) continue;
     const gap = dist(unit.x, unit.y, f.x, f.y) - UNIT_DEFS[f.key].radius - def.radius;
     if (gap < bestGap) {
       bestGap = gap;
@@ -146,6 +163,9 @@ function acquireHealTarget(state: SimState, healer: SimUnit): SimUnit | null {
   let worstPct = 0.999;
   for (const u of state.units) {
     if (!u.alive || u === healer || u.team !== healer.team) continue;
+    // Construções drenam HP por vida útil — curá-las é enxugar gelo e
+    // roubaria toda a cura das tropas. O médico ignora construções.
+    if (UNIT_DEFS[u.key].lifetime) continue;
     const pct = u.hp / u.maxHp;
     if (pct >= worstPct) continue;
     const gap = dist(healer.x, healer.y, u.x, u.y) - UNIT_DEFS[u.key].radius - def.radius;
@@ -178,6 +198,12 @@ function damageTarget(state: SimState, attackerTeam: Team, ref: TargetRef, amoun
   if (ref.kind === 'unit') {
     const u = findUnit(state, ref.id);
     if (!u || !u.alive) return;
+    // Escudo de energia: engole o golpe inteiro (sem transbordar para o HP).
+    if (u.shield > 0) {
+      state.stats[attackerTeam].damageDealt += Math.min(amount, u.shield);
+      u.shield = Math.max(0, u.shield - amount);
+      return;
+    }
     const before = u.hp;
     u.hp -= amount;
     state.stats[attackerTeam].damageDealt += Math.min(amount, before);
@@ -208,7 +234,8 @@ function splashAround(
   radius: number,
   damage: number,
   exclude: TargetRef | null,
-  events: SimEvent[]
+  events: SimEvent[],
+  baseMult = 1
 ): void {
   const foeTeam = otherTeam(team);
   for (const f of state.units) {
@@ -223,7 +250,7 @@ function splashAround(
   const excludedBase = !!exclude && exclude.kind === 'base' && exclude.team === foeTeam;
   if (!excludedBase && base.alive) {
     if (dist(x, y, base.x, base.y) <= radius + BASE_RADIUS) {
-      damageTarget(state, team, { kind: 'base', team: foeTeam }, damage, events);
+      damageTarget(state, team, { kind: 'base', team: foeTeam }, damage * baseMult, events);
     }
   }
 }
@@ -310,6 +337,12 @@ function impactProjectile(state: SimState, p: SimProjectile, events: SimEvent[])
   const target = resolveTarget(state, p.targetId);
   if (target && target.alive) {
     damageTarget(state, p.team, p.targetId, p.damage, events);
+    // Efeito de gelo: o disparo congela o ritmo do alvo por alguns segundos.
+    const slowDur = p.sourceKey ? UNIT_DEFS[p.sourceKey].slowOnHit : undefined;
+    if (slowDur && p.targetId.kind === 'unit') {
+      const u = findUnit(state, p.targetId.id);
+      if (u && u.alive) u.slowT = Math.max(u.slowT, slowDur);
+    }
   }
   events.push({ type: 'hit', x: p.aimX, y: p.aimY, team: p.team, sourceKey: p.sourceKey });
 }
@@ -346,10 +379,35 @@ function updateProjectiles(state: SimState, dt: number, events: SimEvent[]): voi
 
 /* ----------------------------------- Unidades --------------------------------------- */
 
-function engageAttack(state: SimState, u: SimUnit, targetRef: TargetRef, target: ResolvedTarget): void {
+/** Cadência efetiva de ataque considerando lentidão e Fúria. */
+function effectiveCooldown(u: SimUnit, def: UnitDef): number {
+  let cd = def.attackCooldown;
+  if (u.slowT > 0) cd /= SLOW_FACTOR;
+  if (u.rageT > 0) cd /= RAGE_FACTOR;
+  return cd;
+}
+
+function engageAttack(state: SimState, u: SimUnit, targetRef: TargetRef, target: ResolvedTarget, events: SimEvent[]): void {
   const def = UNIT_DEFS[u.key];
   if (u.attackTimer > 0) return;
-  u.attackTimer = def.attackCooldown;
+
+  // Kamikaze (Estopim): ao alcançar o alvo, explode em área e morre.
+  if (def.kamikaze) {
+    u.alive = false;
+    events.push({ type: 'death', unitId: u.id, team: u.team, x: u.x, y: u.y });
+    events.push({ type: 'explosion', x: u.x, y: u.y, team: u.team, big: false });
+    splashAround(state, u.team, u.x, u.y, def.splashRadius ?? 60, def.damage, null, events);
+    return;
+  }
+
+  u.attackTimer = effectiveCooldown(u, def);
+
+  // Investida (Aríete): com embalo acumulado, o golpe multiplica o dano.
+  let damage = def.damage;
+  if (def.charge && u.chargeDist >= def.charge.dist) {
+    damage *= def.charge.mult;
+  }
+  u.chargeDist = 0;
 
   if (def.projectileSpeed) {
     const dir = u.team === 'player' ? -1 : 1;
@@ -363,20 +421,20 @@ function engageAttack(state: SimState, u: SimUnit, targetRef: TargetRef, target:
       target.x,
       target.y,
       def.projectileSpeed,
-      def.damage,
+      damage,
       false,
       false,
       def.splashRadius
     );
   } else if (!u.meleeSwing) {
-    u.meleeSwing = { targetId: targetRef, remaining: 0.07, damage: def.damage, splashRadius: def.splashRadius };
+    u.meleeSwing = { targetId: targetRef, remaining: 0.07, damage, splashRadius: def.splashRadius };
   }
 }
 
 function engageHeal(state: SimState, u: SimUnit, ally: SimUnit): void {
   const def = UNIT_DEFS[u.key];
   if (u.attackTimer > 0) return;
-  u.attackTimer = def.attackCooldown;
+  u.attackTimer = effectiveCooldown(u, def);
   const dir = u.team === 'player' ? -1 : 1;
   spawnProjectile(
     state,
@@ -395,11 +453,53 @@ function engageHeal(state: SimState, u: SimUnit, ally: SimUnit): void {
   );
 }
 
-function updateUnits(state: SimState, dt: number): void {
+function updateUnits(state: SimState, dt: number, events: SimEvent[]): void {
   for (const u of state.units) {
     if (!u.alive) continue;
-    u.attackTimer -= dt;
     const def = UNIT_DEFS[u.key];
+    u.attackTimer -= dt;
+    if (u.stunT > 0) u.stunT -= dt;
+    if (u.slowT > 0) u.slowT -= dt;
+    if (u.rageT > 0) u.rageT -= dt;
+
+    // Construções: vida útil drena o HP até a demolição natural.
+    if (def.lifetime) {
+      u.hp -= (u.maxHp / def.lifetime) * dt;
+      if (u.hp <= 0) {
+        u.alive = false;
+        events.push({ type: 'death', unitId: u.id, team: u.team, x: u.x, y: u.y });
+        continue;
+      }
+    }
+
+    // Gerador (Dínamo): energia extra para o dono.
+    if (def.energyRate) {
+      const e = state.energy[u.team];
+      e.current = Math.min(e.max, e.current + def.energyRate * dt);
+    }
+
+    // Fábrica (Forja): invoca tropas na própria porta, rumo ao inimigo.
+    if (def.spawn) {
+      u.spawnT -= dt;
+      if (u.spawnT <= 0) {
+        u.spawnT = def.spawn.every;
+        const dir = u.team === 'player' ? -1 : 1;
+        state.pendingSpawns.push({
+          team: u.team,
+          key: def.spawn.key,
+          lane: u.lane,
+          delay: 0,
+          x: u.x,
+          y: u.y + dir * (def.radius + 26),
+        });
+      }
+    }
+
+    // Atordoado: não age (o embalo da investida também já foi zerado).
+    if (u.stunT > 0) continue;
+
+    // Construções sem ataque (Forja/Dínamo) são puramente passivas.
+    if (def.damage <= 0 && !def.healer) continue;
 
     if (def.healer) {
       const ally = acquireHealTarget(state, u);
@@ -412,19 +512,29 @@ function updateUnits(state: SimState, dt: number): void {
       }
     }
 
+    // Velocidade efetiva: lentidão, Fúria e o embalo da investida.
+    let speed = def.speed;
+    if (u.slowT > 0) speed *= SLOW_FACTOR;
+    if (u.rageT > 0) speed *= RAGE_FACTOR;
+    if (def.charge && u.chargeDist >= def.charge.dist) speed *= def.charge.speedMult;
+
     const targetRef = acquireTarget(state, u);
     if (targetRef) {
       const target = resolveTarget(state, targetRef)!;
       const gap = dist(u.x, u.y, target.x, target.y) - target.radius - def.radius;
       if (gap <= def.range) {
-        engageAttack(state, u, targetRef, target);
+        engageAttack(state, u, targetRef, target, events);
         continue;
       }
+      if (def.kind === 'building') continue; // torres não perseguem
       const ang = Math.atan2(target.y - u.y, target.x - u.x);
-      u.x += Math.cos(ang) * def.speed * dt;
-      u.y += Math.sin(ang) * def.speed * dt;
+      u.x += Math.cos(ang) * speed * dt;
+      u.y += Math.sin(ang) * speed * dt;
+      u.chargeDist += speed * dt;
     } else {
-      u.y += (u.team === 'player' ? -1 : 1) * def.speed * dt;
+      if (def.kind === 'building') continue;
+      u.y += (u.team === 'player' ? -1 : 1) * speed * dt;
+      u.chargeDist += speed * dt;
     }
   }
 }
@@ -505,11 +615,34 @@ function updateEnergy(state: SimState, dt: number): void {
 
 /* ------------------------------------ Invocação ----------------------------------------- */
 
-function spawnUnitNow(state: SimState, team: Team, key: UnitKey, lane: number, rng: Rng, events: SimEvent[]): void {
+function spawnUnitNow(
+  state: SimState,
+  team: Team,
+  key: UnitKey,
+  lane: number,
+  rng: Rng,
+  events: SimEvent[],
+  at?: { x: number; y: number }
+): void {
+  // Guarda do limite aqui também: fábricas (Forja) invocam sem passar pelo deploy.
+  const aliveCount = state.units.filter((u) => u.alive && u.team === team).length;
+  if (aliveCount >= MAX_UNITS_PER_TEAM) return;
+
   const def = UNIT_DEFS[key];
-  const baseY = team === 'player' ? PLAYER_BASE_Y - SPAWN_OFFSET : ENEMY_BASE_Y + SPAWN_OFFSET;
-  const x = LANE_XS[lane] + rng.between(-14, 14);
-  const y = baseY + rng.between(-22, 22);
+  let x: number;
+  let y: number;
+  if (at) {
+    x = at.x;
+    y = at.y;
+  } else if (def.kind === 'building') {
+    // Construções são erguidas na própria metade, sem jitter (posição tática exata).
+    x = LANE_XS[lane];
+    y = team === 'player' ? PLAYER_BASE_Y - BUILDING_OFFSET : ENEMY_BASE_Y + BUILDING_OFFSET;
+  } else {
+    const baseY = team === 'player' ? PLAYER_BASE_Y - SPAWN_OFFSET : ENEMY_BASE_Y + SPAWN_OFFSET;
+    x = LANE_XS[lane] + rng.between(-14, 14);
+    y = baseY + rng.between(-22, 22);
+  }
   const unit: SimUnit = {
     id: state.nextUnitId++,
     key,
@@ -522,6 +655,12 @@ function spawnUnitNow(state: SimState, team: Team, key: UnitKey, lane: number, r
     alive: true,
     attackTimer: def.attackCooldown * 0.5,
     meleeSwing: null,
+    shield: def.shield ?? 0,
+    stunT: 0,
+    slowT: 0,
+    rageT: 0,
+    chargeDist: 0,
+    spawnT: def.spawn ? def.spawn.every : 0,
   };
   state.units.push(unit);
   events.push({ type: 'spawn', unitId: unit.id, key, team, lane, x, y });
@@ -532,7 +671,7 @@ function materializePendingSpawns(state: SimState, dt: number, rng: Rng, events:
   for (const p of state.pendingSpawns) {
     p.delay -= dt;
     if (p.delay <= 0) {
-      spawnUnitNow(state, p.team, p.key, p.lane, rng, events);
+      spawnUnitNow(state, p.team, p.key, p.lane, rng, events, p.x !== undefined && p.y !== undefined ? { x: p.x, y: p.y } : undefined);
     } else {
       remaining.push(p);
     }
@@ -540,7 +679,57 @@ function materializePendingSpawns(state: SimState, dt: number, rng: Rng, events:
   state.pendingSpawns = remaining;
 }
 
+/* ------------------------------------ Feitiços ------------------------------------ */
+
+function castSpell(state: SimState, def: SpellDef, team: Team, x: number, y: number, events: SimEvent[]): void {
+  events.push({ type: 'spell', key: def.key, team, x, y });
+  const foeTeam = otherTeam(team);
+
+  if (def.damage || def.stunDur) {
+    for (const f of state.units) {
+      if (!f.alive || f.team !== foeTeam) continue;
+      if (dist(x, y, f.x, f.y) > def.radius + UNIT_DEFS[f.key].radius) continue;
+      if (def.stunDur) {
+        f.stunT = Math.max(f.stunT, def.stunDur);
+        f.chargeDist = 0; // atordoar zera o embalo da investida
+      }
+      if (def.damage) {
+        damageTarget(state, team, { kind: 'unit', id: f.id }, def.damage, events);
+      }
+    }
+    // Bases sofrem dano reduzido de feitiço (senão viraria rota de dano "grátis").
+    const base = state.bases[foeTeam];
+    if (def.damage && base.alive && dist(x, y, base.x, base.y) <= def.radius + BASE_RADIUS) {
+      damageTarget(state, team, { kind: 'base', team: foeTeam }, def.damage * SPELL_BASE_DAMAGE_MULT, events);
+    }
+  }
+
+  if (def.rageDur) {
+    for (const f of state.units) {
+      if (!f.alive || f.team !== team) continue;
+      if (dist(x, y, f.x, f.y) <= def.radius + UNIT_DEFS[f.key].radius) {
+        f.rageT = Math.max(f.rageT, def.rageDur);
+      }
+    }
+  }
+}
+
 export function applyDeployCommand(state: SimState, cmd: DeployCommand, rng: Rng, events: SimEvent[]): DeployResult {
+  // Feitiço: efeito instantâneo na área apontada — não invoca unidade.
+  if (isSpellKey(cmd.key)) {
+    const spell = SPELL_DEFS[cmd.key];
+    if (!cmd.free) {
+      const energy = state.energy[cmd.team];
+      if (energy.current < spell.cost) return { ok: false, reason: 'insufficient-energy' };
+      energy.current -= spell.cost;
+    }
+    const x = clamp(cmd.x ?? LANE_XS[cmd.lane], 50, GAME_WIDTH - 50);
+    const y = clamp(cmd.y ?? (FIELD_TOP + FIELD_BOTTOM) / 2, FIELD_TOP, FIELD_BOTTOM);
+    castSpell(state, spell, cmd.team, x, y, events);
+    state.stats[cmd.team].deploys++;
+    return { ok: true };
+  }
+
   const def = UNIT_DEFS[cmd.key];
   if (!def) return { ok: false, reason: 'unknown-unit' };
 
@@ -589,7 +778,7 @@ export function step(state: SimState, dt: number, rng: Rng, commands: DeployComm
 
   materializePendingSpawns(state, dt, rng, events);
   updateEnergy(state, dt);
-  updateUnits(state, dt);
+  updateUnits(state, dt, events);
   updateBases(state, dt);
   resolveMeleeSwings(state, dt, events);
   updateProjectiles(state, dt, events);

@@ -12,7 +12,7 @@ import type {
   ServerToClientEvents,
 } from '../../shared/netProtocol';
 import type { SimEvent } from '../../shared/sim/types';
-import type { MatchConfig, Team, UnitKey } from '../../shared/types';
+import type { CardKey, MatchConfig, Team } from '../../shared/types';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
 
@@ -59,8 +59,9 @@ export class NetworkController {
     });
   }
 
-  sendDeploy(key: UnitKey, lane: number): void {
-    this.socket.emit('deploy:request', { key, lane });
+  /** `x`/`y` = alvo de feitiço na perspectiva local (o servidor espelha se preciso). */
+  sendDeploy(key: CardKey, lane: number, x?: number, y?: number): void {
+    this.socket.emit('deploy:request', { key, lane, x, y });
   }
 
   onDeployRejected(cb: (reason: string) => void): void {

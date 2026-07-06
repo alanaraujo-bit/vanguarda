@@ -14,6 +14,7 @@ import { ResultScene } from './scenes/ResultScene';
 import { SettingsScene } from './scenes/SettingsScene';
 import { ProfileScene } from './scenes/ProfileScene';
 import { CodexScene } from './scenes/CodexScene';
+import { DeckScene } from './scenes/DeckScene';
 import { AuthScene } from './scenes/AuthScene';
 import { RankingScene } from './scenes/RankingScene';
 import { SessionManager } from './net/SessionManager';
@@ -62,6 +63,7 @@ const game = new Phaser.Game({
     SettingsScene,
     ProfileScene,
     CodexScene,
+    DeckScene,
     AuthScene,
     RankingScene,
   ],
