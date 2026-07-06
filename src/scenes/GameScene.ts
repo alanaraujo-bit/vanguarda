@@ -31,7 +31,6 @@ import { UNIT_DEFS } from '../../shared/units';
 import { DIFFICULTIES, skinById } from '../config/progression';
 import { SaveManager } from '../core/SaveManager';
 import { bus, Evt } from '../core/events';
-import { WakeLock } from '../core/WakeLock';
 import { AudioEngine } from '../audio/AudioEngine';
 import { TextureFactory } from '../gfx/TextureFactory';
 import { Unit } from '../entities/Unit';
@@ -129,11 +128,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    // A tela não pode apagar sozinha durante a partida (treino, versus ou
-    // sobrevivência) — só volta a poder dormir quando o jogador sai pro menu.
-    WakeLock.enable();
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => WakeLock.disable());
-
     this.playerColor = skinById(SaveManager.data.skin).color;
     TextureFactory.ensureTeam(this, this.playerColor);
     TextureFactory.ensureTeam(this, COLORS.enemy);

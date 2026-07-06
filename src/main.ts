@@ -5,6 +5,7 @@
 import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH } from '../shared/constants';
 import { AudioEngine } from './audio/AudioEngine';
+import { WakeLock } from './core/WakeLock';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
 import { GameScene } from './scenes/GameScene';
@@ -82,3 +83,8 @@ declare global {
   }
 }
 window.__VANGUARDA__ = game;
+
+// A tela não pode apagar sozinha enquanto o jogo estiver aberto (menu,
+// espera de oponente, partida...) — só volta a poder dormir quando o
+// jogador sai do app/aba.
+WakeLock.start();
