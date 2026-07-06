@@ -1,13 +1,20 @@
 /**
  * GameScene.ts — O coração do jogo: a batalha em tempo real.
- * Orquestra unidades, bases, projéteis, economia, IA adversária,
- * ondas de sobrevivência, efeitos e o desfecho da partida.
+ * Orquestra unidades, bases, energia, IA adversária, ondas de sobrevivência,
+ * efeitos e o desfecho da partida. O combate em si (alvo, movimento, dano,
+ * projéteis, torreta, cronômetro) vive em shared/sim/engine.ts — esta scene
+ * roda esse motor (localmente aqui, ou recebido do servidor no online) e só
+ * cuida da apresentação: sprites, tweens, partículas, som, HUD.
  *
  * A HUD roda como scene paralela e conversa com esta via bus de eventos
  * e chamadas diretas à API pública (playerDeploy, playerEnergy...).
  */
 import Phaser from 'phaser';
-import type { Targetable, Team, UnitKey } from '../../shared/types';
+import type { Team, UnitKey } from '../../shared/types';
+import type { MatchResolution, MatchSnapshot, SnapshotProjectile } from '../../shared/netProtocol';
+import { createInitialState, applyDeployCommand, step } from '../../shared/sim/engine';
+import { Rng } from '../../shared/sim/rng';
+import type { SimEvent, SimState } from '../../shared/sim/types';
 import { NetworkController, type OnlineMatchConfig } from '../net/NetworkController';
 import {
   COLORS,
@@ -17,8 +24,6 @@ import {
   GAME_WIDTH,
   LANE_XS,
   MATCH_DURATION,
-  MAX_UNITS_PER_TEAM,
-  OVERDRIVE_AT,
   PLAYER_BASE_Y,
   SPAWN_OFFSET,
 } from '../../shared/constants';
@@ -31,7 +36,6 @@ import { AudioEngine } from '../audio/AudioEngine';
 import { TextureFactory } from '../gfx/TextureFactory';
 import { Unit } from '../entities/Unit';
 import { Base } from '../entities/Base';
-import { Projectile } from '../entities/Projectile';
 import { EnergySystem } from '../../shared/EnergySystem';
 import { BotAI } from '../systems/BotAI';
 import { WaveDirector } from '../systems/WaveDirector';
@@ -43,6 +47,18 @@ interface FxSet {
   debris: Phaser.GameObjects.Particles.ParticleEmitter;
 }
 
+interface ProjectileVisualSpec {
+  team: Team;
+  sourceKey: UnitKey | null;
+  arc: boolean;
+  healing: boolean;
+  x: number;
+  y: number;
+}
+
+/** Duração de partida "sem limite" pra treino/sobrevivência (o motor sempre tem um cronômetro). */
+const UNLIMITED_TIME = 1e9;
+
 export class GameScene extends Phaser.Scene {
   config!: OnlineMatchConfig;
   playerEnergy!: EnergySystem;
@@ -51,25 +67,37 @@ export class GameScene extends Phaser.Scene {
   matchOver = false;
 
   private units: Unit[] = [];
-  private projectiles: Projectile[] = [];
   private bot: BotAI | null = null;
   private waves: WaveDirector | null = null;
   private network: NetworkController | null = null;
   /** Epoch canônico (do servidor) em que a simulação deve começar — ancora os dois clientes. */
   private onlineStartEpoch: number | null = null;
   private playerColor: number = COLORS.player;
+
+  /** Motor local (versus bot/treino/sobrevivência) — no online, quem roda é o servidor. */
+  private localState: SimState | null = null;
+  private localRng: Rng | null = null;
+
+  /** Visões (Phaser) mantidas em sincronia com o SimState — local ou snapshot do servidor. */
+  private simUnits = new Map<number, Unit>();
+  private simProjectiles = new Map<number, Phaser.GameObjects.Image>();
+
+  /* --------------------------- Modo online (renderer) -------------------------
+   * O servidor é a autoridade — aqui só guardamos os dois últimos snapshots
+   * pra interpolar posição entre ticks. */
+  private netPrevSnapshot: MatchSnapshot | null = null;
+  private netCurSnapshot: MatchSnapshot | null = null;
+  private netCurAt = 0;
+  private netTickInterval = 50;
+  /** Invocações do próprio jogador ainda não confirmadas pelo servidor (previsão otimista). */
+  private pendingDeploys: { key: UnitKey; lane: number; ghost: Unit }[] = [];
   private fxCache = new Map<number, FxSet>();
   private stars!: Phaser.GameObjects.TileSprite;
 
   private elapsed = 0;
-  private timeLeft = MATCH_DURATION;
   private lastWholeSecond = -1;
-  private overdriveOn = false;
   private energyWasFull = false;
   private trainingSpawner: Phaser.Time.TimerEvent | null = null;
-
-  /** Estatísticas do jogador nesta partida. */
-  private stats = { damageDealt: 0, kills: 0, deploys: 0 };
 
   constructor() {
     super('Game');
@@ -79,20 +107,25 @@ export class GameScene extends Phaser.Scene {
     this.config = { mode: data.mode ?? 'versus', difficulty: data.difficulty ?? 'normal', online: data.online };
     // Reset de estado entre partidas (scenes são reutilizadas pelo Phaser).
     this.units = [];
-    this.projectiles = [];
     this.fxCache = new Map();
     this.matchOver = false;
     this.elapsed = 0;
-    this.timeLeft = MATCH_DURATION;
     this.lastWholeSecond = -1;
-    this.overdriveOn = false;
     this.energyWasFull = false;
     this.bot = null;
     this.waves = null;
     this.network = data.online?.network ?? null;
     this.onlineStartEpoch = data.online?.startEpochMs ?? null;
     this.trainingSpawner = null;
-    this.stats = { damageDealt: 0, kills: 0, deploys: 0 };
+    this.localState = null;
+    this.localRng = null;
+    this.simUnits = new Map();
+    this.simProjectiles = new Map();
+    this.netPrevSnapshot = null;
+    this.netCurSnapshot = null;
+    this.netCurAt = 0;
+    this.netTickInterval = 50;
+    this.pendingDeploys = [];
   }
 
   create(): void {
@@ -121,33 +154,42 @@ export class GameScene extends Phaser.Scene {
     this.playerEnergy = new EnergySystem();
 
     /* --------------------------------- Modos --------------------------------- */
-    if (this.config.mode === 'versus') {
-      this.bot = new BotAI(this, DIFFICULTIES[this.config.difficulty]);
-    } else if (this.config.mode === 'online') {
+    if (this.config.mode === 'online') {
       this.wireNetwork();
-    } else if (this.config.mode === 'survival') {
-      this.enemyBase.invulnerable = true;
-      this.playerEnergy.mult = 1.15;
-      this.waves = new WaveDirector(this);
-      // Portal giratório marca a origem das ondas.
-      const portal = this.add
-        .image(midX, ENEMY_BASE_Y - 40, 'portal')
-        .setDepth(DEPTH.bases - 1)
-        .setAlpha(0.85);
-      this.tweens.add({ targets: portal, rotation: Math.PI * 2, duration: 9000, repeat: -1 });
     } else {
-      // Treinamento: energia generosa e alvos ocasionais para praticar.
-      this.playerEnergy.mult = 1.9;
-      let trainingLane = 0;
-      this.trainingSpawner = this.time.addEvent({
-        delay: 13000,
-        startAt: 8000,
-        loop: true,
-        callback: () => {
-          this.deployUnit('enemy', 'faisca', trainingLane, true);
-          trainingLane = (trainingLane + 1) % LANE_XS.length;
-        },
-      });
+      this.localState = createInitialState();
+      this.localRng = new Rng(Date.now() >>> 0);
+
+      if (this.config.mode === 'versus') {
+        const params = DIFFICULTIES[this.config.difficulty];
+        this.bot = new BotAI(this, params);
+        this.localState.energy.enemy.mult = params.regenMult;
+      } else if (this.config.mode === 'survival') {
+        this.localState.timeLeft = UNLIMITED_TIME;
+        this.localState.bases.enemy.invulnerable = true;
+        this.localState.energy.player.mult = 1.15;
+        this.waves = new WaveDirector(this);
+        // Portal giratório marca a origem das ondas.
+        const portal = this.add
+          .image(midX, ENEMY_BASE_Y - 40, 'portal')
+          .setDepth(DEPTH.bases - 1)
+          .setAlpha(0.85);
+        this.tweens.add({ targets: portal, rotation: Math.PI * 2, duration: 9000, repeat: -1 });
+      } else {
+        // Treinamento: energia generosa e alvos ocasionais para praticar, sem cronômetro real.
+        this.localState.timeLeft = UNLIMITED_TIME;
+        this.localState.energy.player.mult = 1.9;
+        let trainingLane = 0;
+        this.trainingSpawner = this.time.addEvent({
+          delay: 13000,
+          startAt: 8000,
+          loop: true,
+          callback: () => {
+            this.localDeploy('enemy', 'faisca', trainingLane, true);
+            trainingLane = (trainingLane + 1) % LANE_XS.length;
+          },
+        });
+      }
     }
 
     /* ---------------------------------- HUD ---------------------------------- */
@@ -179,78 +221,370 @@ export class GameScene extends Phaser.Scene {
   private wireNetwork(): void {
     const net = this.network;
     if (!net) return;
-    net.onDeployRelay((key, lane) => this.deployUnit('enemy', key, lane, true));
+    net.onTick((snapshot, events) => this.onNetTick(snapshot, events));
+    net.onDeployRejected((reason) => this.onDeployRejected(reason));
     net.onOpponentDisconnected(() =>
       bus.emit(Evt.Announce, 'Oponente desconectou — aguardando reconexão...', COLORS.gold)
     );
     net.onOpponentReconnected(() => bus.emit(Evt.Announce, 'Oponente reconectou!', COLORS.success));
-    net.onResolved((resolution) => {
-      if (resolution.outcome === 'voided') {
-        bus.emit(Evt.Announce, 'Partida anulada (divergência de resultado)', COLORS.gold);
-        return;
-      }
-      const sign = resolution.trophyDelta >= 0 ? '+' : '';
-      bus.emit(
-        Evt.Announce,
-        `Ranqueado: ${sign}${resolution.trophyDelta} troféus`,
-        resolution.trophyDelta >= 0 ? COLORS.success : COLORS.danger
-      );
-    });
+    net.onEnded((resolution) => this.finishOnlineMatch(resolution));
   }
 
   update(_time: number, delta: number): void {
     const dt = Math.min(delta / 1000, 0.05);
     this.stars.tilePositionX += delta * 0.006;
     if (this.matchOver) return;
-    // Ancora o início da simulação no epoch do servidor — os dois lados começam no mesmo instante.
-    if (this.config.mode === 'online' && this.onlineStartEpoch !== null && Date.now() < this.onlineStartEpoch) {
+
+    if (this.config.mode === 'online') {
+      this.updateOnlineRender();
       return;
     }
 
-    this.elapsed += dt;
-    this.playerEnergy.update(dt);
-    this.notifyEnergyFull();
-    this.bot?.update(dt);
+    this.updateLocalSim(dt);
+  }
+
+  /* ------------------------------ Motor local --------------------------------
+   * Versus bot / treino / sobrevivência: roda shared/sim/engine.ts aqui mesmo,
+   * a cada frame, com o dt real — sem rede, sem interpolação (a posição já
+   * é exata neste instante). */
+
+  private updateLocalSim(dt: number): void {
+    const state = this.localState;
+    const rng = this.localRng;
+    if (!state || !rng) return;
+
+    this.bot?.update(state, dt);
     this.waves?.update(dt);
-    this.updateVersusClock(dt);
 
-    for (const u of this.units) u.update(dt);
-    this.playerBase.update(dt);
-    this.enemyBase.update(dt);
+    const { events } = step(state, dt, rng, []);
+    this.applyLocalEvents(events);
 
-    for (const p of this.projectiles) p.update(dt);
-    if (this.projectiles.some((p) => p.done)) {
-      this.projectiles = this.projectiles.filter((p) => !p.done);
+    for (const su of state.units) {
+      this.simUnits.get(su.id)?.syncFromSim(su.x, su.y, su.hp);
+    }
+    this.playerBase.syncFromSim(state.bases.player.hp);
+    this.enemyBase.syncFromSim(state.bases.enemy.hp);
+    this.syncLocalProjectiles(state);
+
+    this.playerEnergy.current = state.energy.player.current;
+    this.notifyEnergyFull();
+    this.elapsed = state.elapsed;
+
+    if (this.config.mode === 'versus') {
+      const whole = Math.max(0, Math.ceil(state.timeLeft));
+      if (whole !== this.lastWholeSecond) {
+        this.lastWholeSecond = whole;
+        bus.emit(Evt.Timer, whole);
+      }
     }
   }
 
-  /* ------------------------------ Relógio/versus ----------------------------- */
-
-  private updateVersusClock(dt: number): void {
-    if (this.config.mode !== 'versus' && this.config.mode !== 'online') return;
-    if (this.config.mode === 'online' && this.onlineStartEpoch !== null) {
-      // Deriva do epoch do servidor em vez de acumular dt local — evita deriva entre os dois clientes.
-      this.timeLeft = MATCH_DURATION - (Date.now() - this.onlineStartEpoch) / 1000;
-    } else {
-      this.timeLeft -= dt;
+  private syncLocalProjectiles(state: SimState): void {
+    const seen = new Set<number>();
+    for (const sp of state.projectiles) {
+      seen.add(sp.id);
+      let visual = this.simProjectiles.get(sp.id);
+      if (!visual) {
+        visual = this.createProjectileVisual(sp);
+        this.simProjectiles.set(sp.id, visual);
+      }
+      visual.setPosition(sp.x, sp.y);
     }
-    const whole = Math.max(0, Math.ceil(this.timeLeft));
+    this.pruneProjectileVisuals(seen);
+  }
+
+  private pruneProjectileVisuals(seenIds: Set<number>): void {
+    for (const [id, visual] of this.simProjectiles) {
+      if (!seenIds.has(id)) {
+        visual.destroy();
+        this.simProjectiles.delete(id);
+      }
+    }
+  }
+
+  /** Regras compartilhadas de FX/som/spawn/morte a partir dos eventos do motor local. */
+  private applyLocalEvents(events: SimEvent[]): void {
+    for (const e of events) {
+      switch (e.type) {
+        case 'spawn': {
+          const color = e.team === 'player' ? this.playerColor : COLORS.enemy;
+          const unit = new Unit(this, UNIT_DEFS[e.key], e.team, e.lane, e.x, e.y, color);
+          this.units.push(unit);
+          this.simUnits.set(e.unitId, unit);
+          this.fxRing(e.x, e.y, color, 0.5);
+          AudioEngine.play('deploy');
+          break;
+        }
+        case 'death': {
+          const unit = this.simUnits.get(e.unitId);
+          if (unit) {
+            this.simUnits.delete(e.unitId);
+            unit.die();
+          }
+          break;
+        }
+        case 'hit':
+          this.playHitFx(e.x, e.y, e.team, e.sourceKey);
+          break;
+        case 'heal-fx':
+          this.getFx(COLORS.heal).soft.explode(this.q(5), e.x, e.y);
+          break;
+        case 'explosion': {
+          const color = e.team === 'player' ? this.playerColor : COLORS.enemy;
+          this.fxExplosion(e.x, e.y, color, e.big);
+          AudioEngine.play('explosion');
+          break;
+        }
+        case 'base-hit': {
+          const base = e.team === 'player' ? this.playerBase : this.enemyBase;
+          base.jitter();
+          this.onBaseHit(base);
+          break;
+        }
+        case 'base-destroyed': {
+          const base = e.team === 'player' ? this.playerBase : this.enemyBase;
+          base.alive = false;
+          this.playBaseDestroyedFx(base);
+          this.endMatch(base.team === 'enemy' ? 'win' : 'loss');
+          break;
+        }
+        case 'overdrive':
+          bus.emit(Evt.Overdrive);
+          bus.emit(Evt.Announce, 'SOBRECARGA! ENERGIA 2X', COLORS.energy);
+          AudioEngine.play('overdrive');
+          break;
+        case 'match-ended':
+          this.endMatch(e.winner === 'draw' ? 'draw' : e.winner === 'player' ? 'win' : 'loss');
+          break;
+      }
+    }
+  }
+
+  private playHitFx(x: number, y: number, team: Team, sourceKey: UnitKey | null): void {
+    const color = sourceKey ? UNIT_DEFS[sourceKey].accent : team === 'player' ? this.playerColor : COLORS.enemy;
+    this.fxHit(x, y, color);
+    AudioEngine.play(sourceKey && UNIT_DEFS[sourceKey].radius >= 30 ? 'hit-heavy' : 'hit');
+  }
+
+  /* ------------------------------ Modo online -------------------------------
+   * O servidor É a simulação (shared/sim/engine.ts) — aqui só renderizamos o
+   * que ele manda: interpola posição entre os dois últimos snapshots, aplica
+   * os eventos discretos (fx/som/spawn/morte) e mantém HUD/energia em sincronia. */
+
+  private onNetTick(snapshot: MatchSnapshot, events: SimEvent[]): void {
+    const now = this.time.now;
+    if (this.netCurSnapshot) {
+      this.netTickInterval = Phaser.Math.Clamp(now - this.netCurAt, 20, 200);
+    }
+    this.netPrevSnapshot = this.netCurSnapshot;
+    this.netCurSnapshot = snapshot;
+    this.netCurAt = now;
+
+    this.applyNetEvents(events);
+    this.playerBase.syncFromSim(snapshot.baseHp.player);
+    this.enemyBase.syncFromSim(snapshot.baseHp.enemy);
+
+    // Enquanto há invocação otimista em voo, confia no valor previsto localmente;
+    // sem nada pendente, o snapshot do servidor é sempre a verdade.
+    if (this.pendingDeploys.length === 0) {
+      this.playerEnergy.current = snapshot.myEnergy;
+    }
+    this.elapsed = MATCH_DURATION - snapshot.timeLeft;
+
+    const whole = Math.max(0, Math.ceil(snapshot.timeLeft));
     if (whole !== this.lastWholeSecond) {
       this.lastWholeSecond = whole;
       bus.emit(Evt.Timer, whole);
     }
-    if (!this.overdriveOn && this.timeLeft <= OVERDRIVE_AT) {
-      this.overdriveOn = true;
-      this.playerEnergy.mult *= 2;
-      this.bot?.setOverdrive();
-      bus.emit(Evt.Overdrive);
-      bus.emit(Evt.Announce, 'SOBRECARGA! ENERGIA 2X', COLORS.energy);
-      AudioEngine.play('overdrive');
+  }
+
+  private applyNetEvents(events: SimEvent[]): void {
+    for (const e of events) {
+      switch (e.type) {
+        case 'spawn': {
+          if (e.team === 'player') {
+            const idx = this.pendingDeploys.findIndex((p) => p.key === e.key && p.lane === e.lane);
+            if (idx !== -1) {
+              const [pending] = this.pendingDeploys.splice(idx, 1);
+              pending.ghost.setAlpha(1);
+              pending.ghost.setPosition(e.x, e.y);
+              this.simUnits.set(e.unitId, pending.ghost);
+              break;
+            }
+          }
+          const color = e.team === 'player' ? this.playerColor : COLORS.enemy;
+          const unit = new Unit(this, UNIT_DEFS[e.key], e.team, e.lane, e.x, e.y, color);
+          this.units.push(unit);
+          this.simUnits.set(e.unitId, unit);
+          this.fxRing(e.x, e.y, color, 0.5);
+          AudioEngine.play('deploy');
+          break;
+        }
+        case 'death': {
+          const unit = this.simUnits.get(e.unitId);
+          if (unit) {
+            this.simUnits.delete(e.unitId);
+            unit.die();
+          }
+          break;
+        }
+        case 'hit':
+          this.playHitFx(e.x, e.y, e.team, e.sourceKey);
+          break;
+        case 'heal-fx':
+          this.getFx(COLORS.heal).soft.explode(this.q(5), e.x, e.y);
+          break;
+        case 'explosion': {
+          const color = e.team === 'player' ? this.playerColor : COLORS.enemy;
+          this.fxExplosion(e.x, e.y, color, e.big);
+          AudioEngine.play('explosion');
+          break;
+        }
+        case 'base-hit': {
+          const base = e.team === 'player' ? this.playerBase : this.enemyBase;
+          base.jitter();
+          this.onBaseHit(base);
+          break;
+        }
+        case 'base-destroyed': {
+          const base = e.team === 'player' ? this.playerBase : this.enemyBase;
+          base.alive = false;
+          this.playBaseDestroyedFx(base);
+          break;
+        }
+        case 'overdrive':
+          bus.emit(Evt.Overdrive);
+          bus.emit(Evt.Announce, 'SOBRECARGA! ENERGIA 2X', COLORS.energy);
+          AudioEngine.play('overdrive');
+          break;
+        case 'match-ended':
+          break; // tratado via match:ended dedicado (troféus/stats autoritativos)
+      }
     }
-    if (this.timeLeft <= 0) {
-      const pPct = this.playerBase.hp / this.playerBase.maxHp;
-      const ePct = this.enemyBase.hp / this.enemyBase.maxHp;
-      this.endMatch(pPct > ePct ? 'win' : pPct < ePct ? 'loss' : 'draw');
+  }
+
+  private onDeployRejected(reason: string): void {
+    const pending = this.pendingDeploys.shift();
+    if (pending) {
+      this.playerEnergy.current = Math.min(
+        this.playerEnergy.max,
+        this.playerEnergy.current + UNIT_DEFS[pending.key].cost
+      );
+      this.units = this.units.filter((u) => u !== pending.ghost);
+      pending.ghost.destroy();
+    }
+    if (reason !== 'match-over') {
+      AudioEngine.play('ui-error');
+      bus.emit(Evt.Announce, 'Invocação recusada', COLORS.danger);
+    }
+  }
+
+  /** Roda a cada frame renderizado — interpola entre os dois últimos snapshots recebidos. */
+  private updateOnlineRender(): void {
+    if (this.onlineStartEpoch !== null && Date.now() < this.onlineStartEpoch) return;
+    const cur = this.netCurSnapshot;
+    if (!cur) return;
+    const prev = this.netPrevSnapshot ?? cur;
+    const t = Phaser.Math.Clamp((this.time.now - this.netCurAt) / this.netTickInterval, 0, 1);
+
+    const prevUnits = new Map(prev.units.map((u) => [u.id, u] as const));
+    for (const su of cur.units) {
+      const unit = this.simUnits.get(su.id);
+      if (!unit) continue;
+      const pu = prevUnits.get(su.id) ?? su;
+      const x = Phaser.Math.Linear(pu.x, su.x, t);
+      const y = Phaser.Math.Linear(pu.y, su.y, t);
+      unit.syncFromSim(x, y, su.hp);
+    }
+
+    const prevProj = new Map(prev.projectiles.map((p) => [p.id, p] as const));
+    const seen = new Set<number>();
+    for (const sp of cur.projectiles) {
+      seen.add(sp.id);
+      let visual = this.simProjectiles.get(sp.id);
+      if (!visual) {
+        visual = this.createProjectileVisual(sp);
+        this.simProjectiles.set(sp.id, visual);
+      }
+      const pp = prevProj.get(sp.id) ?? sp;
+      visual.setPosition(Phaser.Math.Linear(pp.x, sp.x, t), Phaser.Math.Linear(pp.y, sp.y, t));
+    }
+    this.pruneProjectileVisuals(seen);
+  }
+
+  private createProjectileVisual(sp: ProjectileVisualSpec | SnapshotProjectile): Phaser.GameObjects.Image {
+    const texture = sp.healing ? 'proj-heal' : sp.arc ? 'proj-shell' : 'proj-bolt';
+    const tint = sp.sourceKey
+      ? UNIT_DEFS[sp.sourceKey].accent
+      : sp.team === 'player'
+        ? this.playerColor
+        : COLORS.enemy;
+    return this.add.image(sp.x, sp.y, texture).setTint(tint).setDepth(DEPTH.projectiles);
+  }
+
+  /** Previsão otimista: spawna a unidade na hora, reconciliada quando o servidor confirmar. */
+  private playerDeployOnline(key: UnitKey, lane: number): boolean {
+    const def = UNIT_DEFS[key];
+    if (this.playerEnergy.current < def.cost) {
+      AudioEngine.play('ui-error');
+      return false;
+    }
+    this.playerEnergy.current -= def.cost;
+
+    const x = LANE_XS[lane];
+    const y = PLAYER_BASE_Y - SPAWN_OFFSET;
+    const ghost = new Unit(this, def, 'player', lane, x, y, this.playerColor);
+    ghost.setAlpha(0.6);
+    this.units.push(ghost);
+    this.pendingDeploys.push({ key, lane, ghost });
+    this.fxRing(x, y, this.playerColor, 0.5);
+    AudioEngine.play('deploy');
+
+    this.network?.sendDeploy(key, lane);
+    return true;
+  }
+
+  private finishOnlineMatch(resolution: MatchResolution): void {
+    if (this.matchOver) return;
+    this.matchOver = true;
+    AudioEngine.stopMusic();
+
+    const sign = resolution.trophyDelta >= 0 ? '+' : '';
+    bus.emit(
+      Evt.Announce,
+      `Ranqueado: ${sign}${resolution.trophyDelta} troféus`,
+      resolution.trophyDelta >= 0 ? COLORS.success : COLORS.danger
+    );
+
+    this.celebrateWinners(resolution.outcome);
+
+    const summary = applyMatchResult(this.config, {
+      outcome: resolution.outcome,
+      durationSec: this.elapsed,
+      damageDealt: resolution.stats.damageDealt,
+      kills: resolution.stats.kills,
+      deploys: resolution.stats.deploys,
+    });
+
+    this.time.delayedCall(1500, () => {
+      bus.emit(Evt.MatchEnd, summary);
+      this.scene.launch('Result', summary);
+      this.scene.pause('Hud');
+      this.scene.pause();
+    });
+  }
+
+  private celebrateWinners(outcome: 'win' | 'loss' | 'draw'): void {
+    const winners = this.unitsOf(outcome === 'win' ? 'player' : 'enemy');
+    for (const u of winners) {
+      this.tweens.add({
+        targets: u,
+        y: u.y - 14,
+        duration: 320,
+        yoyo: true,
+        repeat: 3,
+        ease: Phaser.Math.Easing.Quadratic.Out,
+      });
     }
   }
 
@@ -273,44 +607,22 @@ export class GameScene extends Phaser.Scene {
 
   /** Invocação pelo jogador (validada). @returns sucesso. */
   playerDeploy(key: UnitKey, lane: number): boolean {
-    const ok = this.deployUnit('player', key, lane);
-    if (ok) this.network?.sendDeploy(key, lane);
-    return ok;
+    if (this.config.mode === 'online') return this.playerDeployOnline(key, lane);
+    return this.localDeploy('player', key, lane);
   }
 
-  deployUnit(team: Team, key: UnitKey, lane: number, free = false): boolean {
-    if (this.matchOver) return false;
-    const def = UNIT_DEFS[key];
-    if (this.unitsOf(team).length >= MAX_UNITS_PER_TEAM) {
+  /** Invocação no motor local (bot/ondas/treino também passam por aqui). @returns sucesso. */
+  localDeploy(team: Team, key: UnitKey, lane: number, free = false): boolean {
+    if (!this.localState || !this.localRng || this.matchOver) return false;
+    const events: SimEvent[] = [];
+    const result = applyDeployCommand(this.localState, { team, key, lane, free }, this.localRng, events);
+    if (!result.ok) {
       if (team === 'player') AudioEngine.play('ui-error');
       return false;
     }
-    if (!free) {
-      const energy = team === 'player' ? this.playerEnergy : this.bot?.energy;
-      if (!energy || !energy.trySpend(def.cost)) {
-        if (team === 'player') AudioEngine.play('ui-error');
-        return false;
-      }
-    }
-
-    const color = team === 'player' ? this.playerColor : COLORS.enemy;
-    const baseY = team === 'player' ? PLAYER_BASE_Y - SPAWN_OFFSET : ENEMY_BASE_Y + SPAWN_OFFSET;
-    const count = def.count ?? 1;
-    for (let i = 0; i < count; i++) {
-      this.time.delayedCall(i * 90, () => {
-        if (this.matchOver) return;
-        const x = LANE_XS[lane] + Phaser.Math.Between(-14, 14);
-        const y = baseY + Phaser.Math.Between(-22, 22);
-        const unit = new Unit(this, def, team, lane, x, y, color);
-        this.units.push(unit);
-        this.fxRing(x, y, color, 0.5);
-      });
-    }
-    AudioEngine.play('deploy');
-
+    this.applyLocalEvents(events);
     if (team === 'player') {
-      this.stats.deploys++;
-      this.bot?.notePlayerDeploy(def.role);
+      this.bot?.notePlayerDeploy(UNIT_DEFS[key].role);
       bus.emit(Evt.UnitDeployed);
     }
     return true;
@@ -325,169 +637,6 @@ export class GameScene extends Phaser.Scene {
     AudioEngine.play('death');
   }
 
-  /* -------------------------------- Alvos/IA -------------------------------- */
-
-  /** Inimigo mais próximo na mesma faixa (ou a base inimiga ao alcance). */
-  acquireTarget(unit: Unit): Targetable | null {
-    const foes = this.unitsOf(unit.team === 'player' ? 'enemy' : 'player');
-    let best: Targetable | null = null;
-    let bestGap = Infinity;
-    for (const f of foes) {
-      if (f.lane !== unit.lane) continue;
-      const gap =
-        Phaser.Math.Distance.Between(unit.x, unit.y, f.x, f.y) - f.radius - unit.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = f;
-      }
-    }
-    if (best && bestGap <= unit.def.aggroRange) return best;
-
-    const base = unit.team === 'player' ? this.enemyBase : this.playerBase;
-    if (base.alive) {
-      const gap =
-        Phaser.Math.Distance.Between(unit.x, unit.y, base.x, base.y) - base.radius - unit.radius;
-      if (gap <= unit.def.aggroRange) return base;
-    }
-    return null;
-  }
-
-  /** Aliado mais ferido ao alcance do curandeiro (qualquer faixa próxima). */
-  acquireHealTarget(healer: Unit): Unit | null {
-    let best: Unit | null = null;
-    let worstPct = 0.999;
-    for (const u of this.unitsOf(healer.team)) {
-      if (u === healer) continue;
-      const pct = u.hp / u.maxHp;
-      if (pct >= worstPct) continue;
-      const gap =
-        Phaser.Math.Distance.Between(healer.x, healer.y, u.x, u.y) - u.radius - healer.radius;
-      if (gap <= healer.def.range) {
-        worstPct = pct;
-        best = u;
-      }
-    }
-    return best;
-  }
-
-  nearestEnemyUnit(team: Team, x: number, y: number, range: number): Unit | null {
-    const foes = this.unitsOf(team === 'player' ? 'enemy' : 'player');
-    let best: Unit | null = null;
-    let bestDist = range;
-    for (const f of foes) {
-      const d = Phaser.Math.Distance.Between(x, y, f.x, f.y) - f.radius;
-      if (d < bestDist) {
-        bestDist = d;
-        best = f;
-      }
-    }
-    return best;
-  }
-
-  /* --------------------------------- Combate -------------------------------- */
-
-  /** Aplica dano creditando estatísticas ao time atacante. */
-  dealDamage(team: Team, target: Targetable, amount: number): void {
-    if (!target.alive) return;
-    const before = target.hp;
-    target.takeDamage(amount);
-    if (team === 'player') {
-      this.stats.damageDealt += Math.min(amount, before);
-      if (!target.alive && target instanceof Unit) this.stats.kills++;
-    }
-  }
-
-  /** Golpe direto + dano em área opcional (corpo a corpo). */
-  applyHit(attacker: Unit, target: Targetable, damage: number, splashRadius?: number): void {
-    if (this.matchOver) return;
-    this.dealDamage(attacker.team, target, damage);
-    this.fxHit(target.x, target.y - 10, attacker.def.accent);
-    AudioEngine.play(attacker.def.radius >= 30 ? 'hit-heavy' : 'hit');
-    if (splashRadius) {
-      this.splashAround(attacker.team, target.x, target.y, splashRadius, damage * 0.6, target);
-    }
-  }
-
-  private splashAround(
-    team: Team,
-    x: number,
-    y: number,
-    radius: number,
-    damage: number,
-    exclude: Targetable | null
-  ): void {
-    const foes = this.unitsOf(team === 'player' ? 'enemy' : 'player');
-    for (const f of foes) {
-      if (f === exclude) continue;
-      if (Phaser.Math.Distance.Between(x, y, f.x, f.y) <= radius + f.radius) {
-        this.dealDamage(team, f, damage);
-      }
-    }
-    const base = team === 'player' ? this.enemyBase : this.playerBase;
-    if (base !== exclude && base.alive) {
-      if (Phaser.Math.Distance.Between(x, y, base.x, base.y) <= radius + base.radius) {
-        this.dealDamage(team, base, damage);
-      }
-    }
-  }
-
-  /** Disparo de unidade: dardo reto, granada em arco ou pulso de cura. */
-  fireProjectile(shooter: Unit, target: Targetable, healing: boolean): void {
-    if (this.matchOver) return;
-    const def = shooter.def;
-    const team = shooter.team;
-    const arc = def.arcingProjectile ?? false;
-    const texture = healing ? 'proj-heal' : arc ? 'proj-shell' : 'proj-bolt';
-    AudioEngine.play(healing ? 'heal' : arc ? 'mortar' : 'shoot');
-
-    const proj = new Projectile(this, {
-      x: shooter.x + shooter.dir * (shooter.radius + 4),
-      y: shooter.y - shooter.radius * 0.6,
-      texture,
-      tint: def.accent,
-      target,
-      speed: def.projectileSpeed ?? 500,
-      arc,
-      onHit: (hx, hy) => {
-        if (this.matchOver) return;
-        if (healing) {
-          if (target.alive && target instanceof Unit) target.heal(def.damage);
-          this.getFx(COLORS.heal).soft.explode(this.q(5), hx, hy);
-          return;
-        }
-        if (arc && def.splashRadius) {
-          AudioEngine.play('explosion');
-          this.fxExplosion(hx, hy, def.accent, false);
-          this.splashAround(team, hx, hy, def.splashRadius, def.damage, null);
-          return;
-        }
-        if (target.alive) this.dealDamage(team, target, def.damage);
-        this.fxHit(hx, hy, def.accent);
-      },
-    });
-    this.projectiles.push(proj);
-  }
-
-  /** Tiro da torreta defensiva das bases. */
-  fireTurretBolt(base: Base, target: Unit, damage: number): void {
-    if (this.matchOver) return;
-    const proj = new Projectile(this, {
-      x: base.x,
-      y: base.y - 92,
-      texture: 'proj-bolt',
-      tint: base.teamColor,
-      target,
-      speed: 680,
-      onHit: (hx, hy) => {
-        if (this.matchOver) return;
-        if (target.alive) this.dealDamage(base.team, target, damage);
-        this.fxHit(hx, hy, base.teamColor);
-      },
-    });
-    this.projectiles.push(proj);
-    AudioEngine.play('shoot');
-  }
-
   /* -------------------------------- Bases/fim -------------------------------- */
 
   onBaseHit(base: Base): void {
@@ -496,12 +645,12 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.shake(90, 0.0022);
   }
 
-  onBaseDestroyed(base: Base): void {
+  /** FX/som/tremor da base destruída — usado tanto localmente quanto pelo evento online. */
+  playBaseDestroyedFx(base: Base): void {
     this.fxExplosion(base.x, base.y - 40, base.teamColor, true);
     AudioEngine.play('base-down');
     this.cameras.main.shake(500, 0.012);
     this.tweens.add({ targets: base, alpha: 0.25, duration: 700 });
-    this.endMatch(base.team === 'enemy' ? 'win' : 'loss');
   }
 
   private endMatch(outcome: 'win' | 'loss' | 'draw'): void {
@@ -510,33 +659,15 @@ export class GameScene extends Phaser.Scene {
     this.trainingSpawner?.remove();
     AudioEngine.stopMusic();
 
-    if (this.network) {
-      this.network.sendReport({
-        outcome,
-        myBaseHpPct: this.playerBase.hp / this.playerBase.maxHp,
-        theirBaseHpPctObserved: this.enemyBase.hp / this.enemyBase.maxHp,
-      });
-    }
+    this.celebrateWinners(outcome);
 
-    // Comemoração dos vencedores.
-    const winners = this.unitsOf(outcome === 'win' ? 'player' : 'enemy');
-    for (const u of winners) {
-      this.tweens.add({
-        targets: u,
-        y: u.y - 14,
-        duration: 320,
-        yoyo: true,
-        repeat: 3,
-        ease: Phaser.Math.Easing.Quadratic.Out,
-      });
-    }
-
+    const stats = this.localState?.stats.player ?? { damageDealt: 0, kills: 0, deploys: 0 };
     const summary = applyMatchResult(this.config, {
       outcome,
       durationSec: this.elapsed,
-      damageDealt: this.stats.damageDealt,
-      kills: this.stats.kills,
-      deploys: this.stats.deploys,
+      damageDealt: stats.damageDealt,
+      kills: stats.kills,
+      deploys: stats.deploys,
       wave: this.waves ? Math.max(1, this.waves.wave) : undefined,
     });
 

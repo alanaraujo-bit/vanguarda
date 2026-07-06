@@ -1,17 +1,15 @@
 /**
- * Unit.ts — Entidade de combate.
- * Cada unidade é um agente autônomo com sua própria máquina de estados:
- *   avançar -> engajar (atacar/curar) -> morrer.
- * Animações são 100% procedurais (bob de caminhada, investida de ataque,
- * flash de dano, tremor de recuo), o que dá vida sem spritesheets.
+ * Unit.ts — Visão (Phaser) de uma unidade. Toda a regra de combate vive em
+ * shared/sim/engine.ts — esta classe só espelha o SimState (posição/HP) e
+ * toca a "vida" cosmética: pop de invocação, flash de dano, morte.
  */
 import Phaser from 'phaser';
-import type { Targetable, Team, UnitDef } from '../../shared/types';
+import type { Team, UnitDef } from '../../shared/types';
 import { DEPTH, UNIT_VISUAL_SCALE } from '../../shared/constants';
 import { TextureFactory } from '../gfx/TextureFactory';
 import type { GameScene } from '../scenes/GameScene';
 
-export class Unit extends Phaser.GameObjects.Container implements Targetable {
+export class Unit extends Phaser.GameObjects.Container {
   readonly def: UnitDef;
   readonly team: Team;
   readonly lane: number;
@@ -25,10 +23,6 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
   private sprite: Phaser.GameObjects.Image;
   private shadow: Phaser.GameObjects.Ellipse;
   private hpBar: Phaser.GameObjects.Graphics;
-  private attackTimer: number;
-  private walkPhase = Math.random() * Math.PI * 2;
-  private flashTimer = 0;
-  private lunging = false;
 
   constructor(
     battle: GameScene,
@@ -47,7 +41,6 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
     this.hp = def.hp;
     this.maxHp = def.hp;
     this.radius = def.radius;
-    this.attackTimer = def.attackCooldown * 0.5;
 
     const vs = UNIT_VISUAL_SCALE;
     this.shadow = battle.add
@@ -74,122 +67,26 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
     });
   }
 
-  /** Direção de avanço no eixo Y (jogador sobe, inimigo desce). */
-  get dir(): number {
-    return this.team === 'player' ? -1 : 1;
-  }
-
-  /** Peso tático usado pela IA (custo da carta). */
+  /** Peso tático usado pela IA do bot (custo da carta). */
   get power(): number {
     return this.def.cost / (this.def.count ?? 1);
   }
 
-  update(dt: number): void {
-    if (!this.alive) return;
-    this.attackTimer -= dt;
-    if (this.flashTimer > 0) {
-      this.flashTimer -= dt;
-      if (this.flashTimer <= 0) this.sprite.clearTint();
-    }
-
-    // 1) Suporte: curar aliado ferido tem prioridade.
-    if (this.def.healer) {
-      const ally = this.battle.acquireHealTarget(this);
-      if (ally && this.gapTo(ally) <= this.def.range) {
-        this.engageHeal(ally);
-        return;
+  /** Posição/HP vêm do SimState (motor local ou snapshot do servidor) — sem IA aqui. */
+  syncFromSim(x: number, y: number, hp: number): void {
+    this.x = x;
+    this.y = y;
+    this.setDepth(DEPTH.unitsBase + y);
+    if (hp !== this.hp) {
+      if (hp < this.hp) {
+        this.sprite.setTintFill(0xffffff);
+        this.battle.time.delayedCall(70, () => {
+          if (this.sprite.active) this.sprite.clearTint();
+        });
       }
+      this.hp = hp;
+      this.redrawHpBar();
     }
-
-    // 2) Combate: inimigo ao alcance.
-    const target = this.battle.acquireTarget(this);
-    if (target && this.gapTo(target) <= this.def.range) {
-      this.engageAttack(target);
-      return;
-    }
-
-    // 3) Avanço. Com alvo adquirido (ex.: a base, que fica no centro),
-    // converge até ele — senão, unidades das faixas laterais passariam
-    // reto pela base e sairiam do campo.
-    if (target) {
-      const ang = Math.atan2(target.y - this.y, target.x - this.x);
-      this.x += Math.cos(ang) * this.def.speed * dt;
-      this.y += Math.sin(ang) * this.def.speed * dt;
-    } else {
-      this.y += this.dir * this.def.speed * dt;
-    }
-    this.walkPhase += dt * (6 + this.def.speed * 0.06);
-    this.sprite.y = -Math.abs(Math.sin(this.walkPhase)) * 4;
-    this.sprite.rotation = Math.sin(this.walkPhase) * 0.05;
-    this.setDepth(DEPTH.unitsBase + this.y);
-  }
-
-  /** Distância borda-a-borda até um alvo. */
-  private gapTo(t: Targetable): number {
-    return (
-      Phaser.Math.Distance.Between(this.x, this.y, t.x, t.y) - t.radius - this.radius
-    );
-  }
-
-  private engageAttack(target: Targetable): void {
-    this.sprite.rotation = 0;
-    this.sprite.y = 0;
-    if (this.attackTimer > 0) return;
-    this.attackTimer = this.def.attackCooldown;
-
-    if (this.def.projectileSpeed) {
-      this.battle.fireProjectile(this, target, false);
-    } else {
-      // Investida corpo a corpo.
-      this.melee(target);
-    }
-  }
-
-  private melee(target: Targetable): void {
-    if (this.lunging) return;
-    this.lunging = true;
-    // Investida na direção real do alvo (eixo Y — o corredor de avanço).
-    const lungeY = this.dir * 14;
-    this.battle.tweens.add({
-      targets: this.sprite,
-      y: lungeY,
-      duration: 70,
-      yoyo: true,
-      ease: Phaser.Math.Easing.Quadratic.Out,
-      onYoyo: () => {
-        if (!this.alive) return;
-        this.battle.applyHit(this, target, this.def.damage, this.def.splashRadius);
-      },
-      onComplete: () => {
-        this.lunging = false;
-        if (this.sprite.active) this.sprite.y = 0;
-      },
-    });
-  }
-
-  private engageHeal(ally: Unit): void {
-    this.sprite.rotation = 0;
-    this.sprite.y = 0;
-    if (this.attackTimer > 0) return;
-    this.attackTimer = this.def.attackCooldown;
-    this.battle.fireProjectile(this, ally, true);
-  }
-
-  takeDamage(amount: number): void {
-    if (!this.alive) return;
-    this.hp -= amount;
-    this.sprite.setTintFill(0xffffff);
-    this.flashTimer = 0.07;
-    this.redrawHpBar();
-    if (this.hp <= 0) this.die();
-  }
-
-  heal(amount: number): void {
-    if (!this.alive || this.hp >= this.maxHp) return;
-    this.hp = Math.min(this.maxHp, this.hp + amount);
-    this.sprite.setTint(0x9dffb8);
-    this.flashTimer = 0.12;
-    this.redrawHpBar();
   }
 
   private redrawHpBar(): void {
@@ -205,7 +102,8 @@ export class Unit extends Phaser.GameObjects.Container implements Targetable {
     this.hpBar.fillRoundedRect(-w / 2, y, Math.max(4, w * pct), 7, 3);
   }
 
-  private die(): void {
+  /** O motor já decidiu a morte — só toca a animação (som/partículas/fade). */
+  die(): void {
     this.alive = false;
     this.battle.onUnitDied(this);
     this.battle.tweens.add({

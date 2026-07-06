@@ -1,16 +1,18 @@
 /**
  * NetworkController.ts — Conexão Socket.IO de uma partida online (Fase 0:
  * pareamento por código de sala). Camada fina sobre o protocolo compartilhado
- * (shared/netProtocol.ts) — GameScene decide o que fazer com cada evento.
+ * (shared/netProtocol.ts) — o servidor é a autoridade da simulação; aqui só
+ * repassamos snapshots/eventos/pedidos, GameScene decide o que renderizar.
  */
 import { io, type Socket } from 'socket.io-client';
 import type {
   ClientToServerEvents,
-  MatchReport,
+  MatchSnapshot,
   MatchResolution,
   ServerToClientEvents,
 } from '../../shared/netProtocol';
-import type { MatchConfig, UnitKey } from '../../shared/types';
+import type { SimEvent } from '../../shared/sim/types';
+import type { MatchConfig, Team, UnitKey } from '../../shared/types';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
 
@@ -21,6 +23,8 @@ export interface MatchStartInfo {
   startEpochMs: number;
   opponentName: string;
   opponentTrophies: number;
+  /** Lado do jogador na simulação canônica do servidor (ver server/src/match/perspective.ts). */
+  simTeam: Team;
 }
 
 /** Extensão client-only de MatchConfig — nunca entra em shared/ (carrega o socket). */
@@ -48,6 +52,7 @@ export class NetworkController {
           startEpochMs: payload.startEpochMs,
           opponentName: payload.opponent.displayName,
           opponentTrophies: payload.opponent.trophies,
+          simTeam: payload.simTeam,
         });
       });
       this.socket.emit('room:join', { roomCode });
@@ -55,23 +60,21 @@ export class NetworkController {
   }
 
   sendDeploy(key: UnitKey, lane: number): void {
-    this.socket.emit('deploy:request', { key, lane, clientTime: Date.now() });
-  }
-
-  onDeployRelay(cb: (key: UnitKey, lane: number) => void): void {
-    this.socket.on('deploy:relay', (p) => cb(p.key, p.lane));
+    this.socket.emit('deploy:request', { key, lane });
   }
 
   onDeployRejected(cb: (reason: string) => void): void {
     this.socket.on('deploy:rejected', (p) => cb(p.reason));
   }
 
-  sendReport(report: MatchReport): void {
-    this.socket.emit('match:report', report);
+  /** Estado + eventos discretos de um tick da simulação autoritativa. */
+  onTick(cb: (snapshot: MatchSnapshot, events: SimEvent[]) => void): void {
+    this.socket.on('match:tick', (p) => cb(p.snapshot, p.events));
   }
 
-  onResolved(cb: (resolution: MatchResolution) => void): void {
-    this.socket.on('match:resolved', cb);
+  /** Resultado final — decidido uma única vez, pelo servidor. */
+  onEnded(cb: (resolution: MatchResolution) => void): void {
+    this.socket.on('match:ended', cb);
   }
 
   onOpponentDisconnected(cb: (graceMs: number) => void): void {

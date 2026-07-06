@@ -1,33 +1,40 @@
 /**
  * netProtocol.ts — Contrato de eventos Socket.IO entre client e server.
  * Nenhuma lógica aqui — só os tipos das mensagens trocadas na sala de
- * partida (Fase 0: pareamento por código; a fila de matchmaking da Fase 1
- * usa o mesmo contrato de sala por baixo).
+ * partida. O servidor é a autoridade única da simulação (ver
+ * shared/sim/engine.ts): ele manda snapshots/eventos, o cliente só
+ * renderiza e informa seus pedidos de invocação.
  */
+import type { DeployResult, SimEvent } from './sim/types';
 import type { Team, UnitKey } from './types';
 
 /** Eventos que o CLIENTE emite para o servidor. */
 export interface ClientToServerEvents {
   /** Entra numa sala pelo código (Fase 0) ou fila de matchmaking (Fase 1). */
   'room:join': (payload: { roomCode: string }) => void;
-  /** Pedido de invocação — servidor valida contra a energia-sombra antes de retransmitir. */
-  'deploy:request': (payload: { key: UnitKey; lane: number; clientTime: number }) => void;
-  /** Relato independente de fim de partida (ver protocolo de corroboração no plano). */
-  'match:report': (payload: MatchReport) => void;
+  /** Pedido de invocação — servidor valida contra a energia real da simulação. */
+  'deploy:request': (payload: { key: UnitKey; lane: number }) => void;
   /** Abandono explícito (botão ABANDONAR) — equivale a um forfeit imediato. */
   'match:forfeit': () => void;
 }
 
 /** Eventos que o SERVIDOR emite para os clientes. */
 export interface ServerToClientEvents {
-  /** Os dois jogadores entraram; inclui o epoch canônico de início (ancora os clocks). */
-  'match:start': (payload: { matchId: string; startEpochMs: number; opponent: PublicPlayerInfo }) => void;
-  /** Comando aceito pela energia-sombra, retransmitido com o tick do servidor (para ambos os lados). */
-  'deploy:relay': (payload: { team: Team; key: UnitKey; lane: number; serverTick: number }) => void;
-  /** Comando rejeitado (energia insuficiente na sombra) — só o remetente recebe. */
-  'deploy:rejected': (payload: { reason: 'insufficient-energy' | 'match-over' }) => void;
-  /** Resultado final reconciliado (ver reconciliação de HP% no plano). */
-  'match:resolved': (payload: MatchResolution) => void;
+  /** Os dois jogadores entraram; inclui o epoch canônico de início e o time do
+   * destinatário na simulação (a partir daqui os dois sempre se veem como "player"
+   * — a tradução acontece no cliente, não na simulação). */
+  'match:start': (payload: {
+    matchId: string;
+    startEpochMs: number;
+    opponent: PublicPlayerInfo;
+    simTeam: Team;
+  }) => void;
+  /** Estado + eventos discretos de um tick da simulação autoritativa. */
+  'match:tick': (payload: { snapshot: MatchSnapshot; events: SimEvent[] }) => void;
+  /** Pedido de invocação rejeitado (energia, limite de tropas, partida encerrada). */
+  'deploy:rejected': (payload: { reason: NonNullable<DeployResult['reason']> | 'match-over' }) => void;
+  /** Resultado final — decidido uma única vez, pelo servidor. */
+  'match:ended': (payload: MatchResolution) => void;
   /** Oponente caiu — início da janela de graça antes do forfeit automático. */
   'match:opponent-disconnected': (payload: { graceMs: number }) => void;
   'match:opponent-reconnected': () => void;
@@ -39,15 +46,42 @@ export interface PublicPlayerInfo {
   trophies: number;
 }
 
-export interface MatchReport {
-  outcome: 'win' | 'loss' | 'draw';
-  myBaseHpPct: number;
-  theirBaseHpPctObserved: number;
+export interface SnapshotUnit {
+  id: number;
+  key: UnitKey;
+  team: Team;
+  lane: number;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+}
+
+export interface SnapshotProjectile {
+  id: number;
+  team: Team;
+  sourceKey: UnitKey | null;
+  arc: boolean;
+  healing: boolean;
+  x: number;
+  y: number;
+}
+
+/** Estado sincronizado a cada tick. `myEnergy` é sempre a energia de quem recebe. */
+export interface MatchSnapshot {
+  timeLeft: number;
+  overdriveOn: boolean;
+  myEnergy: number;
+  baseHp: { player: number; enemy: number };
+  units: SnapshotUnit[];
+  projectiles: SnapshotProjectile[];
 }
 
 export interface MatchResolution {
-  outcome: 'win' | 'loss' | 'draw' | 'voided';
+  outcome: 'win' | 'loss' | 'draw';
   trophyDelta: number;
+  /** Estatísticas autoritativas do próprio lado — a base da progressão/XP local. */
+  stats: { damageDealt: number; kills: number; deploys: number };
 }
 
 /* --------------------------------- REST /auth -------------------------------- */

@@ -73,7 +73,7 @@ export class WaveDirector {
       const lane =
         i < LANE_COUNT ? i % LANE_COUNT : Phaser.Math.Between(0, LANE_COUNT - 1);
       this.game.time.delayedCall(i * 450, () => {
-        this.game.deployUnit('enemy', key, lane, true);
+        this.game.localDeploy('enemy', key, lane, true);
       });
     });
   }

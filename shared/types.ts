@@ -67,18 +67,6 @@ export interface UnitDef {
   accent: number;
 }
 
-/** Qualquer coisa que pode ser alvo de ataque (unidades e bases). */
-export interface Targetable {
-  team: Team;
-  x: number;
-  y: number;
-  hp: number;
-  maxHp: number;
-  alive: boolean;
-  radius: number;
-  takeDamage(amount: number): void;
-}
-
 /** Parâmetros de personalidade/dificuldade do bot. */
 export interface DifficultyParams {
   label: string;

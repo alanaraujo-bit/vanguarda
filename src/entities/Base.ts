@@ -1,35 +1,25 @@
 /**
- * Base.ts — O Núcleo de cada time: objetivo da partida.
- * Possui torreta defensiva de curto alcance e feedback visual
- * proporcional ao dano (rachaduras de luz, tremor, fumaça).
+ * Base.ts — Visão (Phaser) do núcleo de cada time. A torreta e a regra de
+ * dano vivem em shared/sim/engine.ts — esta classe só espelha o HP do
+ * SimState e toca o feedback visual (tremor, brilho, fade na destruição).
  */
 import Phaser from 'phaser';
-import type { Targetable, Team } from '../../shared/types';
-import {
-  BASE_HP,
-  BASE_RADIUS,
-  DEPTH,
-  TURRET_COOLDOWN,
-  TURRET_DAMAGE,
-  TURRET_RANGE,
-} from '../../shared/constants';
+import type { Team } from '../../shared/types';
+import { BASE_HP, BASE_RADIUS, DEPTH } from '../../shared/constants';
 import { TextureFactory } from '../gfx/TextureFactory';
 import { bus, Evt } from '../core/events';
 import type { GameScene } from '../scenes/GameScene';
 
-export class Base extends Phaser.GameObjects.Container implements Targetable {
+export class Base extends Phaser.GameObjects.Container {
   readonly team: Team;
   hp: number;
   maxHp: number;
   alive = true;
   radius = BASE_RADIUS;
-  /** Portais da Sobrevivência não podem ser destruídos. */
-  invulnerable = false;
 
   private battle: GameScene;
   private sprite: Phaser.GameObjects.Image;
   private glow: Phaser.GameObjects.Image;
-  private turretTimer = TURRET_COOLDOWN;
   private color: number;
 
   constructor(battle: GameScene, team: Team, x: number, y: number, color: number, hp = BASE_HP) {
@@ -59,25 +49,19 @@ export class Base extends Phaser.GameObjects.Container implements Targetable {
     });
   }
 
-  update(dt: number): void {
-    if (!this.alive) return;
-    this.turretTimer -= dt;
-    if (this.turretTimer <= 0) {
-      const target = this.battle.nearestEnemyUnit(this.team, this.x, this.y, TURRET_RANGE);
-      if (target) {
-        this.turretTimer = TURRET_COOLDOWN;
-        this.battle.fireTurretBolt(this, target, TURRET_DAMAGE);
-      } else {
-        this.turretTimer = 0.1;
-      }
-    }
+  get teamColor(): number {
+    return this.color;
   }
 
-  takeDamage(amount: number): void {
-    if (!this.alive || this.invulnerable) return;
-    this.hp = Math.max(0, this.hp - amount);
+  /** HP vem do SimState (motor local ou snapshot do servidor). */
+  syncFromSim(hp: number): void {
+    if (this.hp === hp) return;
+    this.hp = Math.max(0, hp);
     bus.emit(Evt.BaseHp, this.team, this.hp, this.maxHp);
-    // Tremor proporcional + flash do cristal.
+  }
+
+  /** Tremor cosmético de impacto — chamado pelo handler do evento 'base-hit'. */
+  jitter(): void {
     this.battle.tweens.add({
       targets: this.sprite,
       x: Phaser.Math.Between(-4, 4),
@@ -87,14 +71,5 @@ export class Base extends Phaser.GameObjects.Container implements Targetable {
       repeat: 2,
       onComplete: () => this.sprite.setPosition(0, 0),
     });
-    this.battle.onBaseHit(this);
-    if (this.hp <= 0) {
-      this.alive = false;
-      this.battle.onBaseDestroyed(this);
-    }
-  }
-
-  get teamColor(): number {
-    return this.color;
   }
 }

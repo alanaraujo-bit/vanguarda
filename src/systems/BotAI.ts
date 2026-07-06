@@ -4,6 +4,10 @@
  * pela tabela tática, economiza para avanços coordenados, comete erros
  * calibrados pela dificuldade e adapta as escolhas ao estilo do jogador.
  *
+ * A energia do bot vive em shared/sim (state.energy.enemy) — o motor já
+ * cuida do regen e da Sobrecarga simetricamente para os dois lados; aqui só
+ * decidimos o que e quando invocar.
+ *
  * Decisões em ordem de prioridade:
  *   1. DEFENDER — faixa com ameaça descoberta recebe o counter adequado.
  *   2. CONTINUAR COMBO — termina o avanço que começou (tanque + suporte).
@@ -13,12 +17,10 @@ import Phaser from 'phaser';
 import type { DifficultyParams, Role, UnitKey } from '../../shared/types';
 import { PUSH_COMBOS, ROLE_COUNTERS, UNIT_DEFS, UNIT_ORDER } from '../../shared/units';
 import { ENEMY_BASE_Y, LANE_COUNT, PLAYER_BASE_Y } from '../../shared/constants';
-import { EnergySystem } from '../../shared/EnergySystem';
+import type { SimState } from '../../shared/sim/types';
 import type { GameScene } from '../scenes/GameScene';
 
 export class BotAI {
-  readonly energy: EnergySystem;
-
   private game: GameScene;
   private params: DifficultyParams;
   private decisionTimer: number;
@@ -30,14 +32,7 @@ export class BotAI {
   constructor(game: GameScene, params: DifficultyParams) {
     this.game = game;
     this.params = params;
-    this.energy = new EnergySystem();
-    this.energy.mult = params.regenMult;
     this.decisionTimer = params.decisionInterval * 2;
-  }
-
-  /** Sobrecarga: mantém a proporção da dificuldade. */
-  setOverdrive(): void {
-    this.energy.mult = this.params.regenMult * 2;
   }
 
   /** GameScene informa cada invocação do jogador (o bot "observa"). */
@@ -45,36 +40,35 @@ export class BotAI {
     this.playerUsage[role] = (this.playerUsage[role] ?? 0) + 1;
   }
 
-  update(dt: number): void {
-    this.energy.update(dt);
+  update(state: SimState, dt: number): void {
     this.decisionTimer -= dt;
     if (this.decisionTimer <= 0) {
       this.decisionTimer = this.params.decisionInterval;
-      this.decide();
+      this.decide(state);
     }
   }
 
   /* ------------------------------- Decisão -------------------------------- */
 
-  private decide(): void {
+  private decide(state: SimState): void {
     // 1. Defesa da faixa mais ameaçada.
     const lane = this.mostThreatenedLane();
     if (lane !== -1) {
-      this.defendLane(lane);
+      this.defendLane(state, lane);
       return;
     }
     // 2. Combo de avanço em andamento.
     if (this.comboQueue.length > 0) {
       const next = this.comboQueue[0];
-      if (this.energy.canAfford(UNIT_DEFS[next].cost)) {
+      if (state.energy.enemy.current >= UNIT_DEFS[next].cost) {
         this.comboQueue.shift();
         this.deploy(next, this.comboLane);
       }
       return;
     }
     // 3. Novo avanço quando a reserva está alta.
-    if (this.energy.current >= this.params.pushThreshold) {
-      this.startPush();
+    if (state.energy.enemy.current >= this.params.pushThreshold) {
+      this.startPush(state);
     }
   }
 
@@ -116,20 +110,20 @@ export class BotAI {
     return worst;
   }
 
-  private defendLane(lane: number): void {
+  private defendLane(state: SimState, lane: number): void {
     // Erro proposital: dificuldades baixas às vezes reagem na faixa errada.
     let targetLane = lane;
     if (Math.random() < this.params.mistakeChance) {
       targetLane = Phaser.Math.Between(0, LANE_COUNT - 1);
     }
-    const counter = this.pickCounter(lane);
-    if (counter && this.energy.canAfford(UNIT_DEFS[counter].cost)) {
+    const counter = this.pickCounter(state, lane);
+    if (counter && state.energy.enemy.current >= UNIT_DEFS[counter].cost) {
       this.deploy(counter, targetLane);
     }
   }
 
   /** Escolhe o counter para o papel dominante entre as ameaças da faixa. */
-  private pickCounter(lane: number): UnitKey | null {
+  private pickCounter(state: SimState, lane: number): UnitKey | null {
     const byRole = new Map<Role, number>();
     for (const u of this.game.unitsOf('player')) {
       if (u.lane !== lane) continue;
@@ -144,19 +138,20 @@ export class BotAI {
         dominant = k;
       }
     });
+    const affordable = (key: UnitKey) => state.energy.enemy.current >= UNIT_DEFS[key].cost;
     // Erro proposital: escolhe qualquer unidade paga em vez do counter ideal.
     if (Math.random() < this.params.mistakeChance) {
-      const affordable = UNIT_ORDER.filter((k) => this.energy.canAfford(UNIT_DEFS[k].cost));
-      return affordable.length > 0 ? Phaser.Utils.Array.GetRandom(affordable) : null;
+      const pool = UNIT_ORDER.filter(affordable);
+      return pool.length > 0 ? Phaser.Utils.Array.GetRandom(pool) : null;
     }
     for (const key of ROLE_COUNTERS[dominant]) {
-      if (this.energy.canAfford(UNIT_DEFS[key].cost)) return key;
+      if (affordable(key)) return key;
     }
     // Sem counter pagável: joga o mais barato para ganhar tempo.
     return 'faisca';
   }
 
-  private startPush(): void {
+  private startPush(state: SimState): void {
     // Ataca a faixa onde o jogador está mais fraco.
     let lane = 0;
     let min = Infinity;
@@ -171,6 +166,8 @@ export class BotAI {
       lane = Phaser.Math.Between(0, LANE_COUNT - 1);
     }
 
+    const affordable = (key: UnitKey) => state.energy.enemy.current >= UNIT_DEFS[key].cost;
+
     if (this.params.smartCombos) {
       // Adaptação: se o jogador abusa de enxames, leva dano em área junto.
       const combos = [...PUSH_COMBOS];
@@ -182,21 +179,21 @@ export class BotAI {
       this.comboLane = lane;
       this.comboQueue = [...combo];
       const first = this.comboQueue.shift();
-      if (first && this.energy.canAfford(UNIT_DEFS[first].cost)) {
+      if (first && affordable(first)) {
         this.deploy(first, lane);
       } else if (first) {
         this.comboQueue.unshift(first);
       }
     } else {
       // Fácil: manda uma unidade aleatória que consiga pagar.
-      const affordable = UNIT_ORDER.filter((k) => this.energy.canAfford(UNIT_DEFS[k].cost));
-      if (affordable.length > 0) {
-        this.deploy(Phaser.Utils.Array.GetRandom(affordable), lane);
+      const pool = UNIT_ORDER.filter(affordable);
+      if (pool.length > 0) {
+        this.deploy(Phaser.Utils.Array.GetRandom(pool), lane);
       }
     }
   }
 
   private deploy(key: UnitKey, lane: number): void {
-    this.game.deployUnit('enemy', key, lane);
+    this.game.localDeploy('enemy', key, lane);
   }
 }

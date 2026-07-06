@@ -9,7 +9,6 @@ import { db } from '../db/client.js';
 import { profiles } from '../db/schema.js';
 import { RoomRegistry } from './RoomRegistry.js';
 import type { UnitKey } from '../../../shared/types.js';
-import type { MatchReport } from '../../../shared/netProtocol.js';
 
 interface SocketData {
   userId: string;
@@ -56,11 +55,6 @@ export function registerMatchGateway(io: SocketIOServer): void {
     socket.on('deploy:request', ({ key, lane }: { key: UnitKey; lane: number }) => {
       if (!data.roomCode) return;
       RoomRegistry.get(data.roomCode)?.handleDeploy(socket, key, lane);
-    });
-
-    socket.on('match:report', (report: MatchReport) => {
-      if (!data.roomCode) return;
-      RoomRegistry.get(data.roomCode)?.handleReport(socket, report);
     });
 
     socket.on('match:forfeit', () => {
